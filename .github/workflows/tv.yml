@@ -1,117 +1,66 @@
-name: Selective Sync
+name: Sync from cluntop/tvbox
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # 每天UTC 0点同步
+    - cron: '0 0 * * *'  # 每天UTC时间0点（北京时间8点）自动同步
   workflow_dispatch:     # 允许手动触发
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout current repo
+    - name: Checkout your repo
       uses: actions/checkout@v4
       with:
         token: ${{ secrets.SYNC_TOKEN }}
-        path: repo
-        fetch-depth: 0
-        ref: main  # 确保指定正确的分支
+        repository: 13ztop/tvbox
+        path: my-repo
+        ref: main  # 如果您的仓库使用master分支，请改为master
 
-    - name: Backup protected files
+    - name: Backup your files
       run: |
-        mkdir -p /tmp/sync-backup
-        if [ -f "repo/README.md" ]; then
-          cp repo/README.md /tmp/sync-backup/README.bak
-          echo "Backed up README.md"
-        else
-          echo "README.md not found - skipping"
-        fi
-        if [ -f "repo/DISCLAIMER.md" ]; then
-          cp repo/DISCLAIMER.md /tmp/sync-backup/DISCLAIMER.bak
-          echo "Backed up DISCLAIMER.md"
-        else
-          echo "DISCLAIMER.md not found - skipping"
-        fi
+        mkdir -p /tmp/repo-backup
+        cp my-repo/README.md /tmp/repo-backup/README.md 2>/dev/null || true
+        cp my-repo/DISCLAIMER.md /tmp/repo-backup/DISCLAIMER.md 2>/dev/null || true
+        echo "Backed up your README.md and DISCLAIMER.md"
 
-    - name: Add upstream remote
+    - name: Clone source repo
       run: |
-        cd repo
-        git remote remove upstream || true
-        git remote add upstream https://github.com/cluntop/tvbox.git
-        echo "Upstream remote added"
+        git clone https://github.com/cluntop/tvbox.git source-repo
+        cd source-repo
+        git checkout main  # 如果源仓库使用master分支，请改为master
 
-    - name: Fetch upstream changes
+    - name: Sync files
       run: |
-        cd repo
-        git fetch upstream
-        echo "Fetched upstream changes"
+        # 同步所有文件，但排除需要保留的文件
+        rsync -av --delete \
+          --exclude=README.md \
+          --exclude=DISCLAIMER.md \
+          --exclude=.git \
+          source-repo/ my-repo/
 
-    - name: Merge upstream changes
+    - name: Restore your files
       run: |
-        cd repo
-        git config user.name "GitHub Actions"
-        git config user.email "actions@github.com"
-        
-        # 获取当前分支名
-        CURRENT_BRANCH=$(git symbolic-ref --short HEAD)
-        echo "Current branch: $CURRENT_BRANCH"
-        
-        # 重置到上游分支
-        git reset --hard upstream/main
-        echo "Reset to upstream/main"
-        
-        # 显示最新提交
-        git log -1 --oneline
-
-    - name: Restore protected files
-      run: |
-        if [ -f "/tmp/sync-backup/README.bak" ]; then
-          cp /tmp/sync-backup/README.bak repo/README.md
-          echo "Restored README.md"
-        fi
-        if [ -f "/tmp/sync-backup/DISCLAIMER.bak" ]; then
-          cp /tmp/sync-backup/DISCLAIMER.bak repo/DISCLAIMER.md
-          echo "Restored DISCLAIMER.md"
-        fi
-        
-        cd repo
-        # 添加保护文件
-        [ -f "README.md" ] && git add README.md
-        [ -f "DISCLAIMER.md" ] && git add DISCLAIMER.md
-        echo "Added protected files to staging"
-
-    - name: Check for changes
-      id: check_changes
-      run: |
-        cd repo
-        # 检查是否有未暂存的变更
-        git diff --exit-code || echo "changes_detected=true" >> $GITHUB_OUTPUT
-        
-        # 检查暂存区是否有变更
-        git diff --cached --exit-code || echo "staged_changes=true" >> $GITHUB_OUTPUT
-        
-        # 默认输出
-        echo "changes_detected=${changes_detected:-false}" >> $GITHUB_OUTPUT
-        echo "staged_changes=${staged_changes:-false}" >> $GITHUB_OUTPUT
-        echo "Current status:"
-        git status --short
+        cp /tmp/repo-backup/README.md my-repo/README.md 2>/dev/null || true
+        cp /tmp/repo-backup/DISCLAIMER.md my-repo/DISCLAIMER.md 2>/dev/null || true
+        echo "Restored your README.md and DISCLAIMER.md"
 
     - name: Commit and push changes
-      if: steps.check_changes.outputs.staged_changes == 'true' || steps.check_changes.outputs.changes_detected == 'true'
       run: |
-        cd repo
-        # 添加所有变更（包括上游的变更）
+        cd my-repo
+        git config user.name "GitHub Actions Sync"
+        git config user.email "actions@github.com"
+        
         git add -A
-        git commit -m "Auto-sync: $(date -u +'%Y-%m-%d %H:%M UTC')"
-        echo "Pushing changes to origin..."
-        git push origin main --force
-        echo "Push completed"
-
-    - name: No changes detected
-      if: steps.check_changes.outputs.staged_changes == 'false' && steps.check_changes.outputs.changes_detected == 'false'
-      run: echo "No changes detected - skipping commit"
+        if git diff-index --quiet HEAD --; then
+          echo "No changes to commit"
+        else
+          git commit -m "Auto-sync from cluntop/tvbox: $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push origin main  # 如果您的仓库使用master分支，请改为master
+          echo "Changes pushed successfully"
+        fi
 
     - name: Cleanup
       run: |
-        rm -rf /tmp/sync-backup
-        echo "Cleanup completed"
+        rm -rf source-repo
+        rm -rf /tmp/repo-backup
