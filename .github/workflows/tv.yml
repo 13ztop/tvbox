@@ -15,68 +15,103 @@ jobs:
         token: ${{ secrets.SYNC_TOKEN }}
         path: repo
         fetch-depth: 0
-        ref: main  # 明确指定分支
+        ref: main  # 确保指定正确的分支
 
     - name: Backup protected files
       run: |
         mkdir -p /tmp/sync-backup
         if [ -f "repo/README.md" ]; then
           cp repo/README.md /tmp/sync-backup/README.bak
+          echo "Backed up README.md"
+        else
+          echo "README.md not found - skipping"
         fi
         if [ -f "repo/DISCLAIMER.md" ]; then
           cp repo/DISCLAIMER.md /tmp/sync-backup/DISCLAIMER.bak
+          echo "Backed up DISCLAIMER.md"
+        else
+          echo "DISCLAIMER.md not found - skipping"
         fi
 
     - name: Add upstream remote
       run: |
         cd repo
-        git remote add upstream https://github.com/cluntop/tvbox.git || true
+        git remote remove upstream || true
+        git remote add upstream https://github.com/cluntop/tvbox.git
+        echo "Upstream remote added"
 
     - name: Fetch upstream changes
       run: |
         cd repo
         git fetch upstream
+        echo "Fetched upstream changes"
 
     - name: Merge upstream changes
       run: |
         cd repo
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
-        git reset --hard upstream/main  # 确保分支匹配
         
-        # 强制覆盖保护文件（稍后恢复）
-        git checkout HEAD -- README.md DISCLAIMER.md || true
+        # 获取当前分支名
+        CURRENT_BRANCH=$(git symbolic-ref --short HEAD)
+        echo "Current branch: $CURRENT_BRANCH"
+        
+        # 重置到上游分支
+        git reset --hard upstream/main
+        echo "Reset to upstream/main"
+        
+        # 显示最新提交
+        git log -1 --oneline
 
     - name: Restore protected files
       run: |
         if [ -f "/tmp/sync-backup/README.bak" ]; then
           cp /tmp/sync-backup/README.bak repo/README.md
+          echo "Restored README.md"
         fi
         if [ -f "/tmp/sync-backup/DISCLAIMER.bak" ]; then
           cp /tmp/sync-backup/DISCLAIMER.bak repo/DISCLAIMER.md
+          echo "Restored DISCLAIMER.md"
         fi
         
         cd repo
-        git add README.md DISCLAIMER.md || true
+        # 添加保护文件
+        [ -f "README.md" ] && git add README.md
+        [ -f "DISCLAIMER.md" ] && git add DISCLAIMER.md
+        echo "Added protected files to staging"
 
     - name: Check for changes
       id: check_changes
       run: |
         cd repo
-        git status --porcelain
-        if [ -n "$(git status --porcelain)" ]; then
-          echo "changes=true" >> $GITHUB_OUTPUT
-        else
-          echo "changes=false" >> $GITHUB_OUTPUT
-        fi
+        # 检查是否有未暂存的变更
+        git diff --exit-code || echo "changes_detected=true" >> $GITHUB_OUTPUT
+        
+        # 检查暂存区是否有变更
+        git diff --cached --exit-code || echo "staged_changes=true" >> $GITHUB_OUTPUT
+        
+        # 默认输出
+        echo "changes_detected=${changes_detected:-false}" >> $GITHUB_OUTPUT
+        echo "staged_changes=${staged_changes:-false}" >> $GITHUB_OUTPUT
+        echo "Current status:"
+        git status --short
 
     - name: Commit and push changes
-      if: steps.check_changes.outputs.changes == 'true'
+      if: steps.check_changes.outputs.staged_changes == 'true' || steps.check_changes.outputs.changes_detected == 'true'
       run: |
         cd repo
+        # 添加所有变更（包括上游的变更）
         git add -A
-        git commit -m "Auto-sync: $(date +'%Y-%m-%d %H:%M')"
+        git commit -m "Auto-sync: $(date -u +'%Y-%m-%d %H:%M UTC')"
+        echo "Pushing changes to origin..."
         git push origin main --force
+        echo "Push completed"
+
+    - name: No changes detected
+      if: steps.check_changes.outputs.staged_changes == 'false' && steps.check_changes.outputs.changes_detected == 'false'
+      run: echo "No changes detected - skipping commit"
 
     - name: Cleanup
-      run: rm -rf /tmp/sync-backup
+      run: |
+        rm -rf /tmp/sync-backup
+        echo "Cleanup completed"
