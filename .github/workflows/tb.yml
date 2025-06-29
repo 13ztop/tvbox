@@ -1,0 +1,66 @@
+name: Sync from cluntop/tvbox
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # 每天UTC时间0点（北京时间8点）自动同步
+  workflow_dispatch:     # 允许手动触发
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout your repo
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.SYNC_TOKEN }}
+        repository: 13ztop/tvbox
+        path: my-repo
+        ref: main  # 如果您的仓库使用master分支，请改为master
+
+    - name: Backup your files
+      run: |
+        mkdir -p /tmp/repo-backup
+        cp my-repo/README.md /tmp/repo-backup/README.md 2>/dev/null || true
+        cp my-repo/DISCLAIMER.md /tmp/repo-backup/DISCLAIMER.md 2>/dev/null || true
+        echo "Backed up your README.md and DISCLAIMER.md"
+
+    - name: Clone source repo
+      run: |
+        git clone https://github.com/cluntop/tvbox.git source-repo
+        cd source-repo
+        git checkout main  # 如果源仓库使用master分支，请改为master
+
+    - name: Sync files
+      run: |
+        # 同步所有文件，但排除需要保留的文件
+        rsync -av --delete \
+          --exclude=README.md \
+          --exclude=DISCLAIMER.md \
+          --exclude=.git \
+          source-repo/ my-repo/
+
+    - name: Restore your files
+      run: |
+        cp /tmp/repo-backup/README.md my-repo/README.md 2>/dev/null || true
+        cp /tmp/repo-backup/DISCLAIMER.md my-repo/DISCLAIMER.md 2>/dev/null || true
+        echo "Restored your README.md and DISCLAIMER.md"
+
+    - name: Commit and push changes
+      run: |
+        cd my-repo
+        git config user.name "GitHub Actions Sync"
+        git config user.email "actions@github.com"
+        
+        git add -A
+        if git diff-index --quiet HEAD --; then
+          echo "No changes to commit"
+        else
+          git commit -m "Auto-sync from cluntop/tvbox: $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push origin main  # 如果您的仓库使用master分支，请改为master
+          echo "Changes pushed successfully"
+        fi
+
+    - name: Cleanup
+      run: |
+        rm -rf source-repo
+        rm -rf /tmp/repo-backup
