@@ -1,0 +1,83 @@
+name: Selective Sync
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # 每天UTC 0点同步
+  workflow_dispatch:     # 允许手动触发
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout current repo
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.SYNC_TOKEN }}
+        path: repo
+        fetch-depth: 0
+
+    - name: Backup protected files
+      run: |
+        # 创建临时工作区
+        mkdir -p /tmp/sync-workdir
+        cd /tmp/sync-workdir
+        
+        # 备份文件（如果存在）
+        if [ -f "$GITHUB_WORKSPACE/repo/README.md" ]; then
+          cp "$GITHUB_WORKSPACE/repo/README.md" README.bak
+        fi
+        
+        if [ -f "$GITHUB_WORKSPACE/repo/DISCLAIMER.md" ]; then
+          cp "$GITHUB_WORKSPACE/repo/DISCLAIMER.md" DISCLAIMER.bak
+        fi
+
+    - name: Fetch upstream changes
+      run: |
+        cd "$GITHUB_WORKSPACE/repo"
+        git remote add upstream https://github.com/cluntop/tvbox.git || true
+        git fetch upstream
+
+    - name: Reset to upstream
+      run: |
+        cd "$GITHUB_WORKSPACE/repo"
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        git reset --hard upstream/main
+
+    - name: Restore protected files
+      run: |
+        cd /tmp/sync-workdir
+        
+        # 恢复备份文件（如果存在）
+        if [ -f "README.bak" ]; then
+          cp README.bak "$GITHUB_WORKSPACE/repo/README.md"
+        fi
+        
+        if [ -f "DISCLAIMER.bak" ]; then
+          cp DISCLAIMER.bak "$GITHUB_WORKSPACE/repo/DISCLAIMER.md"
+        fi
+        
+        # 添加文件
+        cd "$GITHUB_WORKSPACE/repo"
+        if [ -f "README.md" ]; then
+          git add README.md
+        fi
+        
+        if [ -f "DISCLAIMER.md" ]; then
+          git add DISCLAIMER.md
+        fi
+
+    - name: Commit and push changes
+      run: |
+        cd "$GITHUB_WORKSPACE/repo"
+        
+        # 检查是否有变更
+        if ! git diff-index --quiet HEAD --; then
+          git commit -m "Sync: $(date +'%Y-%m-%d %H:%M')"
+          git push origin main --force
+        else
+          echo "No changes to commit"
+        fi
+        
+        # 清理临时工作区
+        rm -rf /tmp/sync-workdir
