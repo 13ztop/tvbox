@@ -156,6 +156,13 @@ jobs:
       # ======================
       # 整合通知系统
       # ======================
+      # 设置当前时间（用于所有通知）
+      - name: Set current time
+        id: set_time
+        run: |
+          echo "CURRENT_TIME=$(date -u +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_ENV
+          echo "CURRENT_TIME_SHORT=$(date -u +'%H:%M UTC')" >> $GITHUB_ENV
+          
       - name: Notify Telegram on Sync Success
         if: success() && steps.commit_push.outputs.commit_msg
         uses: appleboy/telegram-action@master
@@ -163,7 +170,7 @@ jobs:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
-            🔄 *智能同步报告 | ${{ steps.source_version.outputs.commit_date }}*
+            🔄 *智能同步报告 | ${{ steps.source_version.outputs.commit_date }} (${{ env.CURRENT_TIME_SHORT }})*
             ━━━━━━━━━━━━━━━━━━━━━━━━
             📦 **源仓库**: [cluntop/tvbox@${{ steps.source_version.outputs.commit_hash }}](https://github.com/cluntop/tvbox/commit/${{ steps.source_version.outputs.full_hash }})
             🏠 **目标仓库**: [${{ github.repository }}@${{ env.TARGET_COMMIT }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
@@ -183,17 +190,17 @@ jobs:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
-            ℹ️ *智能同步报告 | ${{ steps.source_version.outputs.commit_date }}*
+            ℹ️ *智能同步报告 | ${{ steps.source_version.outputs.commit_date }} (${{ env.CURRENT_TIME_SHORT }})*
             ━━━━━━━━━━━━━━━━━━━━━━━━
             📦 **源仓库**: [cluntop/tvbox@${{ steps.source_version.outputs.commit_hash }}](https://github.com/cluntop/tvbox/commit/${{ steps.source_version.outputs.full_hash }})
             🏠 **目标仓库**: [${{ github.repository }}@${{ env.TARGET_COMMIT }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
             ━━━━━━━━━━━━━━━━━━━━━━━━
             • **保留文件**: ${{ steps.find_custom.outputs.custom_files_count }} 个
             • **同步状态**: 内容一致，无需更新
-            • **检测时间**: $(date -u +'%Y-%m-%d %H:%M UTC')
+            • **检测时间**: ${{ env.CURRENT_TIME }}
             ━━━━━━━━━━━━━━━━━━━━━━━━
             ✅ 仓库已是最新状态
-            [查看源仓库更改记录](https://github.com/cluntop/tvbox/commits/main)
+            [查看我的仓库更改记录](https://github.com/${{ github.repository }}/commits/main)
           parse_mode: markdown
           
       - name: Notify Telegram on Failure
@@ -203,14 +210,14 @@ jobs:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
-            ‼️ *智能同步报告 | 同步失败*
+            ‼️ *智能同步报告 | 同步失败 (${{ env.CURRENT_TIME_SHORT }})*
             ━━━━━━━━━━━━━━━━━━━━━━━━
             📦 **源仓库**: [cluntop/tvbox](https://github.com/cluntop/tvbox)
             🏠 **目标仓库**: [${{ github.repository }}](https://github.com/${{ github.repository }})
             ━━━━━━━━━━━━━━━━━━━━━━━━
             • **失败阶段**: ${{ job.status }}
             • **工作流**: [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-            • **发生时间**: $(date -u +'%Y-%m-%d %H:%M UTC')
+            • **发生时间**: ${{ env.CURRENT_TIME }}
             ━━━━━━━━━━━━━━━━━━━━━━━━
             🚨 需要立即处理!
             [查看错误日志](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
