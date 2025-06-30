@@ -16,26 +16,33 @@ jobs:
           repository: 13ztop/tvbox
           path: my-repo
           ref: main
+          fetch-depth: 0  # 获取完整历史记录
+          
+      - name: Create backup directory
+        run: mkdir -p /tmp/repo-backup
           
       - name: Identify custom files
         id: find_custom
         run: |
           # 克隆源仓库用于比较
-          git clone https://github.com/cluntop/tvbox.git source-repo
+          git clone --depth 1 https://github.com/cluntop/tvbox.git source-repo
           
-          # 查找目标仓库独有的文件
+          # 查找目标仓库独有的文件（排除.git目录）
           cd my-repo
-          find . -type f | while read file; do
+          find . -type f -not -path './.git/*' | while read file; do
             if [ ! -f "../source-repo/$file" ]; then
-              echo "Custom file detected: $file"
-              echo "$file" >> /tmp/custom-files.txt
+              # 排除Git内部文件和工作流目录
+              if [[ "$file" != *".github/workflows/"* ]]; then
+                echo "Custom file detected: $file"
+                echo "$file" >> /tmp/repo-backup/custom-files.txt
+              fi
             fi
           done
           
-          # 保存自定义文件列表
-          if [ -f /tmp/custom-files.txt ]; then
-            echo "custom_files_count=$(wc -l < /tmp/custom-files.txt)" >> $GITHUB_OUTPUT
-            cp /tmp/custom-files.txt /tmp/repo-backup/custom-files.txt
+          # 保存自定义文件数量
+          if [ -f /tmp/repo-backup/custom-files.txt ]; then
+            custom_count=$(wc -l < /tmp/repo-backup/custom-files.txt)
+            echo "custom_files_count=$custom_count" >> $GITHUB_OUTPUT
           else
             echo "custom_files_count=0" >> $GITHUB_OUTPUT
           fi
@@ -44,8 +51,6 @@ jobs:
           
       - name: Backup protected content
         run: |
-          mkdir -p /tmp/repo-backup
-          
           # 备份需要保护的核心文件
           cp my-repo/README.md /tmp/repo-backup/ 2>/dev/null || true
           cp my-repo/DISCLAIMER.md /tmp/repo-backup/ 2>/dev/null || true
@@ -55,12 +60,12 @@ jobs:
           cp -R my-repo/.github/* /tmp/repo-backup/.github/ 2>/dev/null || true
           
           # 备份自定义文件（基于上一步的检测）
-          if [ -f /tmp/custom-files.txt ]; then
+          if [ -f /tmp/repo-backup/custom-files.txt ]; then
             mkdir -p /tmp/repo-backup/custom-files
             while read file; do
               mkdir -p "/tmp/repo-backup/custom-files/$(dirname "$file")"
               cp "my-repo/$file" "/tmp/repo-backup/custom-files/$file"
-            done < /tmp/custom-files.txt
+            done < /tmp/repo-backup/custom-files.txt
           fi
           
           echo "Protected content backed up"
@@ -91,8 +96,8 @@ jobs:
           if [ -d /tmp/repo-backup/custom-files ]; then
             cd /tmp/repo-backup/custom-files
             find . -type f | while read file; do
-              mkdir -p "my-repo/$(dirname "$file")"
-              cp "$file" "my-repo/$file"
+              mkdir -p "$GITHUB_WORKSPACE/my-repo/$(dirname "$file")"
+              cp "$file" "$GITHUB_WORKSPACE/my-repo/$file"
             done
           fi
           
@@ -112,24 +117,16 @@ jobs:
             echo "no_changes_detected=true" >> $GITHUB_OUTPUT
             echo "没有需要提交的变更"
           else
-            # 检测变更类型
-            changes=$(git diff --name-only HEAD)
-            source_updates=$(echo "$changes" | grep -vE 'README.md|DISCLAIMER.md|.github/' | wc -l)
-            custom_files_restored=$([ -d /tmp/repo-backup/custom-files ] && find /tmp/repo-backup/custom-files -type f | wc -l || echo 0)
-            
-            commit_msg="智能同步: "
-            if [ $source_updates -gt 0 ]; then
-              commit_msg+="更新源文件($source_updates) "
-            fi
-            if [ $custom_files_restored -gt 0 ]; then
-              commit_msg+="保留自定义文件($custom_files_restored)"
+            # 生成提交信息
+            commit_msg="智能同步: 更新源文件"
+            if [ -f /tmp/repo-backup/custom-files.txt ]; then
+              custom_count=$(wc -l < /tmp/repo-backup/custom-files.txt)
+              commit_msg+=", 保留 $custom_count 个自定义文件"
             fi
             
             git commit -m "$commit_msg"
             git push origin main
             echo "commit_msg=$commit_msg" >> $GITHUB_OUTPUT
-            echo "changes_count=$source_updates" >> $GITHUB_OUTPUT
-            echo "custom_files_count=$custom_files_restored" >> $GITHUB_OUTPUT
             echo "变更已成功推送"
           fi
           
@@ -148,14 +145,13 @@ jobs:
           message: |
             🔄 *智能同步完成!*
             ━━━━━━━━━━━━━━━━━━━━
-            • **更新文件**: ${{ steps.commit_push.outputs.changes_count }} 个
-            • **保留文件**: ${{ steps.commit_push.outputs.custom_files_count }} 个
             • **提交信息**: ${{ steps.commit_push.outputs.commit_msg }}
+            • **保留文件**: ${{ steps.find_custom.outputs.custom_files_count }} 个
             ━━━━━━━━━━━━━━━━━━━━
             ✅ 源文件已更新
             ✅ 自定义文件已保留
             ✅ 工作流配置未更改
-            [查看详情](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
+            [查看提交](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
           parse_mode: markdown
           
       - name: Notify Telegram on No Changes
