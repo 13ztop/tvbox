@@ -125,7 +125,7 @@
 			"name": "🅱哔哩┃合集",
 			"type": 3,
 			"api": "csp_Bili",
-			"jar": "./fm.jar",
+			"jar": "./jar/fm.jar",
 			"style": {
 				"type": "list",
 				"ratio": 1.1
