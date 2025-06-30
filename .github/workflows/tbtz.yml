@@ -154,14 +154,17 @@ jobs:
           rm -rf /tmp/repo-backup
           
       # ======================
-      # 整合通知系统
+      # 整合通知系统（上海时间）
       # ======================
-      # 设置当前时间（用于所有通知）
-      - name: Set current time
+      # 设置上海时间
+      - name: Set Shanghai time
         id: set_time
         run: |
-          echo "CURRENT_TIME=$(date -u +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_ENV
-          echo "CURRENT_TIME_SHORT=$(date -u +'%H:%M UTC')" >> $GITHUB_ENV
+          # 获取上海时间 (CST = UTC+8)
+          CURRENT_TIME=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M CST')
+          CURRENT_TIME_SHORT=$(TZ='Asia/Shanghai' date +'%H:%M CST')
+          echo "CURRENT_TIME=$CURRENT_TIME" >> $GITHUB_ENV
+          echo "CURRENT_TIME_SHORT=$CURRENT_TIME_SHORT" >> $GITHUB_ENV
           
       - name: Notify Telegram on Sync Success
         if: success() && steps.commit_push.outputs.commit_msg
