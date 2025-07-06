@@ -16,28 +16,23 @@ jobs:
       TARGET_REPO_NAME: "tvbox"
       # 目标仓库完整名称，用于简化后续引用
       TARGET_FULL_REPO: "13ztop/tvbox"
+      TZ: Asia/Shanghai # 直接设置时区环境变量
 
     steps:
-      # 1. 设置时区 (提前设置，确保后续时间戳准确)
-      - name: Set Shanghai time
-        uses: zhangjie-github/set-timezone@v1.0
-        with:
-          timezone: Asia/Shanghai
-
-      # 2. 准备阶段 - 获取仓库信息
+      # 1. 准备阶段 - 获取仓库信息
       - name: Setup environment
         id: setup
         run: |
           # 获取目标仓库默认分支
           # 使用 GitHub API 获取默认分支，需要 SYNC_TOKEN 权限
           TARGET_BRANCH=$(curl -s -H "Authorization: token ${{ secrets.SYNC_TOKEN }}" \
-            "https://api.github.com/repos/${{ env.TARGET_FULL_REPO }}" | jq -r .default_branch )
+            "https://api.github.com/repos/${{ env.TARGET_FULL_REPO }}" | jq -r .default_branch)
           echo "TARGET_BRANCH=$TARGET_BRANCH" >> $GITHUB_ENV
           echo "target_branch=$TARGET_BRANCH" >> $GITHUB_OUTPUT
 
           # 获取源仓库最新 commit SHA
           # 对于 tvbox 仓库，通常主分支是 main 或 master，这里假设是 main
-          SOURCE_COMMIT=$(curl -s "https://api.github.com/repos/${{ env.SOURCE_REPO_OWNER }}/${{ env.SOURCE_REPO_NAME }}/commits/main" | jq -r .sha )
+          SOURCE_COMMIT=$(curl -s "https://api.github.com/repos/${{ env.SOURCE_REPO_OWNER }}/${{ env.SOURCE_REPO_NAME }}/commits/main" | jq -r .sha)
           SOURCE_SHORT=${SOURCE_COMMIT:0:7}
           echo "SOURCE_COMMIT=$SOURCE_COMMIT" >> $GITHUB_ENV
           echo "SOURCE_SHORT=$SOURCE_SHORT" >> $GITHUB_ENV
@@ -47,21 +42,21 @@ jobs:
           echo "目标仓库默认分支: $TARGET_BRANCH"
           echo "源仓库最新 commit: $SOURCE_SHORT"
 
-      # 3. 并行克隆仓库
+      # 2. 并行克隆仓库
       - name: Parallel clone repositories
         run: |
           # 克隆源仓库，只克隆最新一次提交，不包含 .git 目录以减小体积
           git clone --depth 1 --filter=blob:none \
             "https://github.com/${{ env.SOURCE_REPO_OWNER }}/${{ env.SOURCE_REPO_NAME }}.git" source-repo &
 
-          # 克隆目标仓库 ，使用 SYNC_TOKEN 进行认证，并指定默认分支
+          # 克隆目标仓库，使用 SYNC_TOKEN 进行认证，并指定默认分支
           git clone --depth 1 --branch "${{ env.TARGET_BRANCH }}" \
             "https://${{ secrets.SYNC_TOKEN }}@github.com/${{ env.TARGET_FULL_REPO }}.git" target-repo &
 
           wait
           echo "仓库克隆完成"
 
-      # 4. 智能同步（使用 rsync ）
+      # 3. 智能同步（使用 rsync）
       - name: Smart sync with rsync
         run: |
           # 安装 rsync
@@ -86,7 +81,7 @@ jobs:
 
           echo "仓库同步完成"
 
-      # 5. 快速变更检测
+      # 4. 快速变更检测
       - name: Detect changes
         id: change_detection
         run: |
@@ -107,15 +102,15 @@ jobs:
             echo "Changes detected: $CHANGES_COUNT files."
           fi
 
-      # 6. 提交变更
+      # 5. 提交变更
       - name: Commit and push changes
         if: steps.change_detection.outputs.has_changes == 'true'
         run: |
           cd target-repo
 
           COMMIT_MSG="Sync: ${{ env.SOURCE_REPO_OWNER }}/${{ env.SOURCE_REPO_NAME }}@${{ env.SOURCE_SHORT }}"
-          COMMIT_MSG+=$'\n\n• Updated ${{ steps.change_detection.outputs.changes_count }} files'
-          COMMIT_MSG+=$'\n• Excluded README.md and .github/workflows/'
+          COMMIT_MSG+=$\n\n• Updated ${{ steps.change_detection.outputs.changes_count }} files
+          COMMIT_MSG+=$\n• Excluded README.md and .github/workflows/
 
           git commit -m "$COMMIT_MSG"
           git push origin "HEAD:${{ env.TARGET_BRANCH }}"
@@ -129,7 +124,7 @@ jobs:
           echo "full_sha=$PUSHED_FULL_SHA" >> $GITHUB_OUTPUT
           echo "Changes committed and pushed."
 
-      # 7. 通知系统（Telegram）
+      # 6. 通知系统（Telegram）
       - name: Notify Telegram - Success
         if: success()
         uses: appleboy/telegram-action@master
@@ -138,17 +133,17 @@ jobs:
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           format: markdown
           message: |
-            ${{ steps.change_detection.outputs.has_changes == 'true' && '✅ TVBoxTG 同步成功' || 'ℹ️ TVBoxTG 无变更' }} | ${{ env.TZ_SHORT }}
+            ${{ steps.change_detection.outputs.has_changes == 'true' && '✅ TVBoxTG 同步成功' || 'ℹ️ TVBoxTG 无变更' }} | ${{ env.TZ }}
             ━━━━━━━━━━━━━━━━━━━━━━━━
-            🔄 *源仓库*: [${{ env.SOURCE_REPO_OWNER }}/${{ env.SOURCE_REPO_NAME }}@${{ env.SOURCE_SHORT }}](https://github.com/${{ env.SOURCE_REPO_OWNER }}/${{ env.SOURCE_REPO_NAME }}/commit/${{ env.SOURCE_COMMIT }} )
-            📦 *目标仓库*: [${{ env.TARGET_FULL_REPO }}@${{ env.PUSHED_COMMIT_SHA || steps.setup.outputs.target_branch }}](https://github.com/${{ env.TARGET_FULL_REPO }}/commit/${{ env.PUSHED_FULL_SHA || steps.setup.outputs.source_commit }} )
+            🔄 *源仓库*: [${{ env.SOURCE_REPO_OWNER }}/${{ env.SOURCE_REPO_NAME }}@${{ env.SOURCE_SHORT }}](https://github.com/${{ env.SOURCE_REPO_OWNER }}/${{ env.SOURCE_REPO_NAME }}/commit/${{ env.SOURCE_COMMIT }})
+            📦 *目标仓库*: [${{ env.TARGET_FULL_REPO }}@${{ env.PUSHED_COMMIT_SHA || steps.setup.outputs.target_branch }}](https://github.com/${{ env.TARGET_FULL_REPO }}/commit/${{ env.PUSHED_FULL_SHA || steps.setup.outputs.source_commit }})
             ━━━━━━━━━━━━━━━━━━━━━━━━
             ${{ steps.change_detection.outputs.has_changes == 'true' && format('📂 *变更文件*: {0} 个', steps.change_detection.outputs.changes_count) || '🆗 *同步状态*: 内容一致，无需更新' }}
             🔒 *排除文件*: README.md, .github/workflows/
-            🕒 *执行时间*: ${{ env.TZ_TIME }}
+            🕒 *执行时间*: $(TZ='${{ env.TZ }}' date +'%Y-%m-%d %H:%M:%S')
             ━━━━━━━━━━━━━━━━━━━━━━━━
             ${{ steps.change_detection.outputs.has_changes == 'true' && '🎉 仓库已更新!' || '👍 仓库已是最新状态!' }}
-            [查看详情](https://github.com/${{ env.TARGET_FULL_REPO }}/actions/runs/${{ github.run_id }} )
+            [查看详情](https://github.com/${{ env.TARGET_FULL_REPO }}/actions/runs/${{ github.run_id }})
 
       - name: Notify Telegram - Failure
         if: failure()
@@ -158,15 +153,15 @@ jobs:
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           format: markdown
           message: |
-            ‼️ *TVBoxTG 同步失败* | ${{ env.TZ_SHORT }}
+            ‼️ *TVBoxTG 同步失败* | ${{ env.TZ }}
             ━━━━━━━━━━━━━━━━━━━━━━━━
             ⚙️ *工作流*: [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-            🕒 *发生时间*: ${{ env.TZ_TIME }}
+            🕒 *发生时间*: $(TZ='${{ env.TZ }}' date +'%Y-%m-%d %H:%M:%S')
             ━━━━━━━━━━━━━━━━━━━━━━━━
             ❌ *错误详情*: 请检查工作流日志
             [立即查看](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
-      # 8. 清理工作区
+      # 7. 清理工作区
       - name: Cleanup
         if: always()
         run: |
