@@ -2,144 +2,58 @@ name: Auto Sync from cluntop/tvbox
 
 on:
   schedule:
-    - cron: '0 */6 * * *'  # 每 6 小时执行一次
-  workflow_dispatch:
+    - cron: '0 0 * * *' # 每天 UTC 0 点执行（北京时间 8 点）
+  workflow_dispatch: # 允许手动执行
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-    env:
-      PROTECTED_PATHS: |
-        README.md
-        LICENSE
-        .github/workflows/
-        config.json
-        custom_config.json
-        proxy.pac
-        rules/
-        scripts/
-        resource/
-        .gitignore
-
     steps:
-      - name: Set source commit info
-        id: source_info
-        run: |
-          git clone --depth 1 https://github.com/cluntop/tvbox.git source-repo
-          cd source-repo
-          echo "hash=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-          echo "full_hash=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
-          echo "date=$(git log -1 --format=%cd --date=format:'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
-      - name: Set dynamic PR branch
-        run: echo "PR_BRANCH=sync/cluntop-${{ steps.source_info.outputs.hash }}" >> $GITHUB_ENV
+    - name: 设置 Git 用户
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Get default branch of target repo
-        run: |
-          branch=$(curl -s -H "Authorization: token ${{ secrets.SYNC_TOKEN }}" https://api.github.com/repos/13ztop/tvbox | jq -r .default_branch)
-          echo "DEFAULT_BRANCH=$branch" >> $GITHUB_ENV
+    - name: 克隆上游仓库
+      run: |
+        git clone --depth=1 https://github.com/cluntop/tvbox upstream
 
-      - name: Checkout target repo
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.SYNC_TOKEN }}
-          repository: 13ztop/tvbox
-          ref: ${{ env.DEFAULT_BRANCH }}
-          path: target-repo
-          fetch-depth: 0
+    - name: 克隆目标仓库
+      run: |
+        git clone --depth=1 https://x-access-token:${{ secrets.SYNC_TOKEN }}@github.com/13ztop/tvbox target
+        cp -r target/.git upstream/
 
-      - name: Backup protected files
-        run: |
-          mkdir -p /tmp/protected
-          while read path; do
-            full_path="target-repo/$path"
-            if [ -e "$full_path" ]; then
-              mkdir -p "/tmp/protected/$(dirname "$path")"
-              cp -r "$full_path" "/tmp/protected/$path"
-            fi
-          done <<< "${{ env.PROTECTED_PATHS }}"
+    - name: 删除排除文件
+      run: |
+        cd upstream
+        rm -f README.md || true
+        rm -rf .github/workflows || true
 
-      - name: Sync source to target
-        run: rsync -av --delete --exclude='.git' source-repo/ target-repo/
+    - name: 推送到目标仓库
+      run: |
+        cd upstream
+        git add .
+        if git diff --cached --quiet; then
+          echo "📦 tvbox 同步报告%0A%0A🟢 无变更%0A🕒 时间: $(date -u '+%Y-%m-%d %H:%M UTC')" > report.txt
+        else
+          git diff --cached --name-only > changed_files.txt
+          CHANGED=$(cat changed_files.txt | sed 's/^/ - /' | sed ':a;N;$!ba;s/\n/%0A/g')
+          git commit -m "🔄 Sync from cluntop/tvbox $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git push origin HEAD:main
+          echo "📦 tvbox 同步报告%0A%0A✅ 已同步更新%0A🕒 时间: $(date -u '+%Y-%m-%d %H:%M UTC')%0A📄 变更文件:%0A$CHANGED" > report.txt
+        fi
 
-      - name: Restore protected files
-        run: rsync -av /tmp/protected/ target-repo/
+    - name: Telegram 通知（成功）
+      if: success()
+      run: |
+        curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
+        -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+        -d text="$(cat upstream/report.txt)"
 
-      - name: Detect changes and prepare PR
-        id: detect_changes
-        run: |
-          cd target-repo
-          git config user.name "TVBox Sync Bot"
-          git config user.email "tvbox-sync@users.noreply.github.com"
-          git checkout -b ${{ env.PR_BRANCH }}
-          git add -A
-          if git diff --cached --quiet; then
-            echo "changed=false" >> $GITHUB_OUTPUT
-          else
-            echo "changed=true" >> $GITHUB_OUTPUT
-            git diff --cached --name-only | head -n 10 > ../changed_files.txt
-            full_count=$(git diff --cached --name-only | wc -l)
-            echo "changes=$full_count" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Create Pull Request
-        if: steps.detect_changes.outputs.changed == 'true'
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.SYNC_TOKEN }}
-          path: target-repo
-          commit-message: "🔁 同步: cluntop/tvbox 自动同步更新"
-          branch: ${{ env.PR_BRANCH }}
-          title: "🔁 同步更新 cluntop/tvbox@${{ steps.source_info.outputs.hash }}"
-          body: |
-            自动同步自 cluntop/tvbox 源仓库。
-
-            - 来源提交：`${{ steps.source_info.outputs.full_hash }}`
-            - 文件更新：${{ steps.detect_changes.outputs.changes }} 个
-
-            请在合并前检查保留文件是否正确。
-          base: ${{ env.DEFAULT_BRANCH }}
-        id: cpr
-
-      - name: Set Time
-        id: time
-        run: |
-          echo "now=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M %Z')" >> $GITHUB_OUTPUT
-          echo "now_short=$(TZ='Asia/Shanghai' date +'%H:%M %Z')" >> $GITHUB_OUTPUT
-
-      - name: Notify Telegram - PR Created
-        if: steps.detect_changes.outputs.changed == 'true'
-        uses: appleboy/telegram-action@master
-        with:
-          to: ${{ secrets.TELEGRAM_CHAT_ID }}
-          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          message: |
-            🚀 *TVBox PR 同步通知*
-            🕒 ${{ steps.time.outputs.now_short }}
-
-            🔄 源仓库: [cluntop/tvbox](https://github.com/cluntop/tvbox)
-            📦 目标仓库: [13ztop/tvbox](https://github.com/13ztop/tvbox)
-
-            🧾 更新文件数: ${{ steps.detect_changes.outputs.changes }} 个
-            🗂️ 变更文件（前10）:
-            ```
-            $(cat changed_files.txt)
-            ```
-            🔁 PR 链接: [点击查看](${{ steps.cpr.outputs.pull-request-url }})
-          parse_mode: markdown
-
-      - name: Notify Telegram - No Changes
-        if: steps.detect_changes.outputs.changed == 'false'
-        uses: appleboy/telegram-action@master
-        with:
-          to: ${{ secrets.TELEGRAM_CHAT_ID }}
-          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          message: |
-            ℹ️ *TVBox 同步检查*
-            🕒 ${{ steps.time.outputs.now_short }}
-
-            🔄 源仓库: [cluntop/tvbox](https://github.com/cluntop/tvbox)
-            📦 目标仓库: [13ztop/tvbox](https://github.com/13ztop/tvbox)
-
-            ✅ 无需更新，内容一致。
-          parse_mode: markdown
+    - name: Telegram 通知（失败）
+      if: failure()
+      run: |
+        curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
+        -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+        -d text="📦 tvbox 同步失败！%0A❌ 请检查 Actions 日志%0A🕒 时间: $(date -u '+%Y-%m-%d %H:%M UTC')"
