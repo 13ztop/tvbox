@@ -14,12 +14,10 @@ jobs:
       SOURCE_REPO_NAME: "tvbox"
       TARGET_REPO_OWNER: "13ztop"
       TARGET_REPO_NAME: "tvbox"
-      # 目标仓库完整名称，用于简化后续引用
       TARGET_FULL_REPO: "13ztop/tvbox"
-      TZ: Asia/Shanghai # 直接设置时区环境变量
+      TZ: Asia/Shanghai
 
     steps:
-      # 1. 检出目标仓库
       - name: Checkout target repository
         uses: actions/checkout@v4
         with:
@@ -27,17 +25,13 @@ jobs:
           token: ${{ secrets.SYNC_TOKEN }}
           path: target-repo
 
-      # 2. 准备阶段 - 获取仓库信息
       - name: Setup environment
         id: setup
         run: |
-          # 获取目标仓库默认分支 (actions/checkout 已经处理了，这里仅为兼容旧逻辑)
           TARGET_BRANCH=$(git -C target-repo rev-parse --abbrev-ref HEAD)
           echo "TARGET_BRANCH=$TARGET_BRANCH" >> $GITHUB_ENV
           echo "target_branch=$TARGET_BRANCH" >> $GITHUB_OUTPUT
 
-          # 获取源仓库最新 commit SHA
-          # 对于 tvbox 仓库，通常主分支是 main 或 master，这里假设是 main
           SOURCE_COMMIT=$(curl -s "https://api.github.com/repos/${{ env.SOURCE_REPO_OWNER }}/${{ env.SOURCE_REPO_NAME }}/commits/main" | jq -r .sha)
           SOURCE_SHORT=${SOURCE_COMMIT:0:7}
           echo "SOURCE_COMMIT=$SOURCE_COMMIT" >> $GITHUB_ENV
@@ -45,99 +39,51 @@ jobs:
           echo "source_commit=$SOURCE_COMMIT" >> $GITHUB_OUTPUT
           echo "source_short=$SOURCE_SHORT" >> $GITHUB_OUTPUT
 
-          echo "目标仓库默认分支: $TARGET_BRANCH"
-          echo "源仓库最新 commit: $SOURCE_SHORT"
-
-      # 3. 克隆源仓库
       - name: Clone source repository
         run: |
-          # 克隆源仓库，只克隆最新一次提交，不包含 .git 目录以减小体积
           git clone --depth 1 --filter=blob:none \
             "https://github.com/${{ env.SOURCE_REPO_OWNER }}/${{ env.SOURCE_REPO_NAME }}.git" source-repo
 
-          echo "源仓库克隆完成"
-
-      # 4. 智能同步（使用 rsync）
       - name: Smart sync with rsync
         run: |
-          # 安装 rsync
           sudo apt-get update && sudo apt-get install -y rsync
-
-          # 创建排除文件列表
           EXCLUDE_FILE="/tmp/exclude-list.txt"
           echo "README.md" > $EXCLUDE_FILE
-          echo ".github/" >> $EXCLUDE_FILE # 排除整个 .github 目录，包括 workflows
+          echo ".github/" >> $EXCLUDE_FILE
+          rsync -av --delete --exclude-from="$EXCLUDE_FILE" source-repo/ target-repo/
 
-          echo "排除列表内容:"
-          cat $EXCLUDE_FILE
-
-          # 执行 rsync 同步
-          # -a: 归档模式，保留文件属性，如权限、时间戳等
-          # -v: 详细模式，显示同步过程
-          # --delete: 删除目标目录中源目录不存在的文件
-          # --exclude-from: 从文件中读取排除模式
-          rsync -av --delete \
-            --exclude-from="$EXCLUDE_FILE" \
-            source-repo/ target-repo/
-
-          echo "仓库同步完成"
-
-      # 5. 快速变更检测
       - name: Detect changes
         id: change_detection
         run: |
           cd target-repo
-
           git config user.name "GitHub Actions Sync Bot"
           git config user.email "github-actions-sync-bot@users.noreply.github.com"
-
           git add -A
-          # 检查是否有实际的变更
           if git diff --cached --exit-code --quiet; then
             echo "no_changes=true" >> $GITHUB_OUTPUT
-            echo "No changes detected."
           else
             echo "has_changes=true" >> $GITHUB_OUTPUT
             CHANGES_COUNT=$(git diff --cached --name-only | wc -l)
             echo "changes_count=$CHANGES_COUNT" >> $GITHUB_OUTPUT
-            echo "Changes detected: $CHANGES_COUNT files."
           fi
 
-      # 6. 提交变更
       - name: Commit and push changes
         if: steps.change_detection.outputs.has_changes == 'true'
         run: |
           cd target-repo
-
           git config user.name "GitHub Actions Sync Bot"
           git config user.email "github-actions-sync-bot@users.noreply.github.com"
-
           git add -A
-
-          # 将提交信息写入临时文件，确保换行符正确
           COMMIT_MSG_FILE="/tmp/commit_message.txt"
-          # 使用 heredoc 语法，这是在 shell 脚本中创建多行字符串最可靠的方式
           cat <<EOF > "$COMMIT_MSG_FILE"
 Sync: ${{ env.SOURCE_REPO_OWNER }}/${{ env.SOURCE_REPO_NAME }}@${{ env.SOURCE_SHORT }}
 
 • Updated ${{ steps.change_detection.outputs.changes_count }} files
 • Excluded README.md and .github/workflows/
 EOF
-
-          # 使用 git commit -F 从文件中读取提交信息
           git commit -F "$COMMIT_MSG_FILE"
           git push origin "HEAD:${{ env.TARGET_BRANCH }}"
 
-          # 获取推送后的 commit SHA
-          PUSHED_COMMIT_SHA=$(git -C target-repo rev-parse --short HEAD)
-          PUSHED_FULL_SHA=$(git -C target-repo rev-parse HEAD)
-          echo "PUSHED_COMMIT_SHA=$PUSHED_COMMIT_SHA" >> $GITHUB_ENV
-          echo "PUSHED_FULL_SHA=$PUSHED_FULL_SHA" >> $GITHUB_ENV
-          echo "commit_sha=$PUSHED_COMMIT_SHA" >> $GITHUB_OUTPUT
-          echo "full_sha=$PUSHED_FULL_SHA" >> $GITHUB_OUTPUT
-          echo "Changes committed and pushed."
-
-      # 7. 通知系统（Telegram）
       - name: Notify Telegram - Success
         if: success()
         uses: appleboy/telegram-action@master
@@ -148,15 +94,14 @@ EOF
           message: |
             ${{ steps.change_detection.outputs.has_changes == 'true' && '✅ TVBoxTG 同步成功' || 'ℹ️ TVBoxTG 无变更' }} | ${{ env.TZ }}
             ━━━━━━━━━━━━━━━━━━━━━━━━
-            🔄 *源仓库*: [${{ env.SOURCE_REPO_OWNER }}/${{ env.SOURCE_REPO_NAME }}@${{ env.SOURCE_SHORT }}](https://github.com/${{ env.SOURCE_REPO_OWNER }}/${{ env.SOURCE_REPO_NAME }}/commit/${{ env.SOURCE_COMMIT }})
-            📦 *目标仓库*: [${{ env.TARGET_FULL_REPO }}@${{ env.PUSHED_COMMIT_SHA || steps.setup.outputs.target_branch }}](https://github.com/${{ env.TARGET_FULL_REPO }}/commit/${{ env.PUSHED_FULL_SHA || steps.setup.outputs.source_commit }})
+            🔄 *源仓库*: ${{ env.SOURCE_REPO_OWNER }}/${{ env.SOURCE_REPO_NAME }}
+            📦 *目标仓库*: ${{ env.TARGET_REPO_OWNER }}/${{ env.TARGET_REPO_NAME }}
             ━━━━━━━━━━━━━━━━━━━━━━━━
             ${{ steps.change_detection.outputs.has_changes == 'true' && format('📂 *变更文件*: {0} 个', steps.change_detection.outputs.changes_count) || '🆗 *同步状态*: 内容一致，无需更新' }}
             🔒 *排除文件*: README.md, .github/workflows/
-            🕒 *执行时间*: $(TZ='${{ env.TZ }}' date +'%Y-%m-%d %H:%M:%S')
+            🕒 *执行时间*: $(date +'%Y-%m-%d %H:%M:%S')
             ━━━━━━━━━━━━━━━━━━━━━━━━
             ${{ steps.change_detection.outputs.has_changes == 'true' && '🎉 仓库已更新!' || '👍 仓库已是最新状态!' }}
-            [查看详情](https://github.com/${{ env.TARGET_FULL_REPO }}/actions/runs/${{ github.run_id }})
 
       - name: Notify Telegram - Failure
         if: failure()
@@ -168,16 +113,13 @@ EOF
           message: |
             ‼️ *TVBoxTG 同步失败* | ${{ env.TZ }}
             ━━━━━━━━━━━━━━━━━━━━━━━━
-            ⚙️ *工作流*: [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-            🕒 *发生时间*: $(TZ='${{ env.TZ }}' date +'%Y-%m-%d %H:%M:%S')
+            ⚙️ *工作流*: ${{ github.workflow }}
+            🕒 *发生时间*: $(date +'%Y-%m-%d %H:%M:%S')
             ━━━━━━━━━━━━━━━━━━━━━━━━
             ❌ *错误详情*: 请检查工作流日志
-            [立即查看](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
-      # 8. 清理工作区
       - name: Cleanup
         if: always()
         run: |
           rm -rf source-repo target-repo
           rm -f /tmp/exclude-list.txt
-          echo "工作区清理完成。"
