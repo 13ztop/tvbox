@@ -113,11 +113,19 @@ jobs:
           git config user.email "github-actions-sync-bot@users.noreply.github.com"
 
           git add -A
-          COMMIT_MSG="Sync: ${{ env.SOURCE_REPO_OWNER }}/${{ env.SOURCE_REPO_NAME }}@${{ env.SOURCE_SHORT }}"
-          COMMIT_MSG+=$\n\n• Updated ${{ steps.change_detection.outputs.changes_count }} files
-          COMMIT_MSG+=$\n• Excluded README.md and .github/workflows/
 
-          git commit -m "$COMMIT_MSG"
+          # 将提交信息写入临时文件，确保换行符正确
+          COMMIT_MSG_FILE="/tmp/commit_message.txt"
+          # 使用 heredoc 语法，这是在 shell 脚本中创建多行字符串最可靠的方式
+          cat <<EOF > "$COMMIT_MSG_FILE"
+Sync: ${{ env.SOURCE_REPO_OWNER }}/${{ env.SOURCE_REPO_NAME }}@${{ env.SOURCE_SHORT }}
+
+• Updated ${{ steps.change_detection.outputs.changes_count }} files
+• Excluded README.md and .github/workflows/
+EOF
+
+          # 使用 git commit -F 从文件中读取提交信息
+          git commit -F "$COMMIT_MSG_FILE"
           git push origin "HEAD:${{ env.TARGET_BRANCH }}"
 
           # 获取推送后的 commit SHA
