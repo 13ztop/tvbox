@@ -2,13 +2,13 @@ name: Optimized TVBoxTG Sync
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # 每天UTC时间0点（北京时间8点）自动同步
-  workflow_dispatch:      # 允许手动触发
+    - cron: '0 0 * * *'
+  workflow_dispatch:
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 15   # 设置超时防止卡死
+    timeout-minutes: 15
     env:
       SOURCE_REPO_OWNER: "cluntop"
       SOURCE_REPO_NAME: "tvbox"
@@ -74,14 +74,17 @@ jobs:
           git config user.name "GitHub Actions Sync Bot"
           git config user.email "github-actions-sync-bot@users.noreply.github.com"
           git add -A
-          COMMIT_MSG_FILE="/tmp/commit_message.txt"
-          cat <<EOF > "$COMMIT_MSG_FILE"
+          
+          # 修正的heredoc语法部分
+          COMMIT_MSG=$(cat <<EOF
 Sync: ${{ env.SOURCE_REPO_OWNER }}/${{ env.SOURCE_REPO_NAME }}@${{ env.SOURCE_SHORT }}
 
 • Updated ${{ steps.change_detection.outputs.changes_count }} files
 • Excluded README.md and .github/workflows/
 EOF
-          git commit -F "$COMMIT_MSG_FILE"
+          )
+          
+          git commit -m "$COMMIT_MSG"
           git push origin "HEAD:${{ env.TARGET_BRANCH }}"
 
       - name: Notify Telegram - Success
