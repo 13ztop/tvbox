@@ -1,0 +1,83 @@
+name: Auto Sync from cluntop/tvbox
+
+on:
+  schedule:
+    - cron: '0 0 * * *'       # 每天 UTC 0 点（北京时间 8 点）
+  workflow_dispatch:          # 允许手动触发
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+    # ---------- 基础设置 ----------
+    - name: Configure Git
+      run: |
+        git config --global user.name  "github-actions[bot]"
+        git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+    # ---------- 克隆仓库 ----------
+    - name: Clone upstream
+      run: git clone --depth=1 https://github.com/cluntop/tvbox upstream
+
+    - name: Clone target
+      run: |
+        git clone --depth=1 https://x-access-token:${{ secrets.SYNC_TOKEN }}@github.com/13ztop/tvbox target
+        cp -r target/.git upstream/          # 把目标仓库的 .git 覆盖到 upstream
+
+    # ---------- 写入 .syncignore ----------
+    - name: Create .syncignore
+      run: |
+        cd upstream
+        cat > .syncignore <<'EOF'
+README.md
+.github/workflows/
+.github/.github/
+.github/**/workflows/
+EOF
+
+    # ---------- 生成干净副本 ----------
+    - name: Build clean tree with rsync
+      run: |
+        cd upstream
+        mkdir ../clean
+        # 把当前目录同步到 ../clean，排除 .git 及 .syncignore 中列出的路径
+        rsync -a --delete \
+              --exclude-from='.syncignore' \
+              --exclude='.git' ./ ../clean/
+
+        # 清空工作区（保留 .git）
+        find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+        # 再把干净文件复制回来
+        rsync -a --delete ../clean/ ./
+
+    # ---------- 提交并推送 ----------
+    - name: Commit & push
+      run: |
+        cd upstream
+        git add -A
+        if git diff --cached --quiet; then
+          # 没有任何变动
+          printf "📦 tvbox 同步报告%%0A%%0A🟢 无变更%%0A🕒 时间: %s UTC" "$(date -u '+%Y-%m-%d %H:%M')" > report.txt
+        else
+          # 生成变更文件列表
+          CHANGED=$(git diff --cached --name-only | sed 's/^/ - /' | sed ':a;N;$!ba;s/\n/%0A/g')
+          git commit -m "🔄 Sync from cluntop/tvbox $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git push origin HEAD:main
+          printf "📦 tvbox 同步报告%%0A%%0A✅ 已同步更新%%0A🕒 时间: %s UTC%%0A📄 变更文件:%%0A%s" "$(date -u '+%Y-%m-%d %H:%M')" "$CHANGED" > report.txt
+        fi
+
+    # ---------- Telegram 通知 ----------
+    - name: Telegram notice (success)
+      if: success()
+      run: |
+        curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
+             -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+             -d text="$(cat upstream/report.txt)"
+
+    - name: Telegram notice (failure)
+      if: failure()
+      run: |
+        curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
+             -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+             -d text="📦 tvbox 同步失败！%%0A❌ 请检查 Actions 日志%%0A🕒 时间: $(date -u '+%Y-%m-%d %H:%M UTC')"
