@@ -1,65 +1,62 @@
-name: Sync upstream repository
+name: Sync TVBox Repo
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # UTC时间每天0点
+    - cron: '0 */6 * * *' # 每6小时运行一次
   workflow_dispatch:
 
 jobs:
-  sync-repo:
+  sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 3  # 关键：强制超时设置
-    
+
     steps:
-      - name: Start timing
-        id: time-start
-        run: echo "start=$(date +%s)" >> $GITHUB_OUTPUT
-      
-      # 高效同步核心
-      - name: Sync with repo-sync
-        uses: repo-sync/github-sync@v2
-        with:
-          source_repo: "cluntop/tvbox"
-          destination_repo: "13ztop/tvbox"
-          github_token: ${{ secrets.SYNC_TOKEN }}
-          exclude: "README.md, .github/workflows/*"
-          force: true  # 强制覆盖解决冲突
-        timeout-minutes: 2  # 单步超时控制
+    - name: Checkout target repository
+      uses: actions/checkout@v4
+      with:
+        repository: 13ztop/tvbox
+        token: ${{ secrets.PAT_TOKEN }}
 
-      # 记录执行结果
-      - name: Set sync status
-        id: set-status
-        run: |
-          if [ $? -eq 0 ]; then
-            echo "result=success" >> $GITHUB_OUTPUT
-          else
-            echo "result=failed" >> $GITHUB_OUTPUT
-          fi
+    - name: Set up Git
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: End timing
-        id: time-end
-        run: echo "end=$(date +%s)" >> $GITHUB_OUTPUT
+    - name: Clone source repository
+      run: |
+        git clone https://github.com/cluntop/tvbox.git source_repo
 
-      - name: Calculate duration
-        id: calc-duration
-        run: |
-          start=${{ steps.time-start.outputs.start }}
-          end=${{ steps.time-end.outputs.end }}
-          echo "duration=$((end - start))" >> $GITHUB_OUTPUT
+    - name: Sync files
+      run: |
+        shopt -s extglob
+        cp -r source_repo/!(README.md|.github) ./
+        rm -rf source_repo
 
-  notify:
-    needs: [sync-repo]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Send Telegram alert
-        uses: appleboy/telegram-action@v1
-        with:
-          token: ${{ secrets.TG_TOKEN }}
-          to: ${{ secrets.TG_CHAT_ID }}
-          message: |
-            ⏱️ *执行报告 | ${{ github.workflow }} #${{ github.run_number }}*
-            ├── 状态：`${{ needs.sync-repo.outputs.set-status.result }}`
-            ├── 耗时：${{ needs.sync-repo.outputs.calc-duration.duration }}秒
-            └── 触发方式：`${{ github.event_name }}`
-            ${{ contains(needs.sync-repo.outputs.set-status.result, 'success') && '✅ 同步完成' || '❌ 同步失败！立即检查：'}}
-            ${{ contains(needs.sync-repo.outputs.set-status.result, 'failed') && format('https://github.com/13ztop/tvbox/actions/runs/{0}', github.run_id) }}
+    - name: Commit and push changes
+      run: |
+        git add .
+        git diff-index --quiet HEAD || git commit -m "Sync from cluntop/tvbox"
+        git push
+
+    - name: Send Telegram Notification (Success)
+      if: success()
+      uses: appleboy/telegram-action@master
+      with:
+        to: ${{ secrets.TELEGRAM_CHAT_ID }}
+        token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        message: |-
+          ✅ GitHub Actions 同步成功！
+          仓库：13ztop/tvbox
+          时间：${{ github.event.repository.pushed_at }}
+          详情：https://github.com/13ztop/tvbox/actions/runs/${{ github.run_id }}
+
+    - name: Send Telegram Notification (Failure)
+      if: failure()
+      uses: appleboy/telegram-action@master
+      with:
+        to: ${{ secrets.TELEGRAM_CHAT_ID }}
+        token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        message: |-
+          ❌ GitHub Actions 同步失败！
+          仓库：13ztop/tvbox
+          时间：${{ github.event.repository.pushed_at }}
+          详情：https://github.com/13ztop/tvbox/actions/runs/${{ github.run_id }}
