@@ -2,16 +2,23 @@ name: Sync upstream repository
 
 on:
   schedule:
-    # 每天 UTC 时间 00:00 自动同步（北京时间 08:00）
-    - cron: '0 0 * * *'
-  workflow_dispatch:  # 允许手动触发
+    - cron: '0 0 * * *'  # 每天 UTC 0 点自动同步
+  workflow_dispatch:      # 允许手动触发
 
 jobs:
   sync-repo:
     runs-on: ubuntu-latest
+    outputs:
+      run-status: ${{ job.status }}
+      timestamp: ${{ steps.get-timestamp.outputs.time }}
 
     steps:
-      # 步骤 1：检出目标仓库
+      # 获取当前时间戳 (优化放在第一步)
+      - name: Get current timestamp
+        id: get-timestamp
+        run: echo "time=$(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
+
+      # 检出目标仓库
       - name: Checkout target repo
         uses: actions/checkout@v4
         with:
@@ -19,34 +26,36 @@ jobs:
           token: ${{ secrets.SYNC_TOKEN }}
           path: target
 
-      # 步骤 2：克隆源仓库
+      # 克隆源仓库
       - name: Clone source repo
-        run: |
-          git clone --depth 1 https://github.com/cluntop/tvbox.git source
+        run: git clone --depth 1 https://github.com/cluntop/tvbox.git source
 
-      # 步骤 3：同步并排除文件
+      # 同步并排除文件
       - name: Sync with exclusions
         run: |
-          cd source
+          # 删除需要排除的内容
+          rm -rf source/README.md source/.github/workflows
 
-          # 删除需要排除的文件/目录
-          rm -rf README.md .github/workflows
+          # 移动所有文件
+          mv -f source/* target/ > /dev/null 2>&1 || :
+          mv -f source/.* target/ > /dev/null 2>&1 || :
+
+          # 配置 Git 身份
+          cd target
+          git config user.name "Sync Bot"
+          git config user.email "actions@github.com"
           
-          # 移动所有文件到目标仓库目录
-          shopt -s dotglob
-          mv -f * ../target/
-          cd ../target
-
-          # 设置 Git 身份
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
+          # 检测是否有变更
+          if git diff --quiet --exit-code; then
+            echo "没有检测到变更" > $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          
           # 提交变更
-          git add -A
-          git commit -m "chore: auto-sync from upstream" || echo "没有变更需要提交"
-        shell: bash
+          git add --all
+          git commit -m "chore: auto-sync (${{ steps.get-timestamp.outputs.time }})"
 
-      # 步骤 4：推送更改
+      # 推送更改
       - name: Push changes
         run: |
           cd target
@@ -54,27 +63,32 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.SYNC_TOKEN }}
 
-      # 步骤 5：发送 Telegram 通知
+      # 记录同步状态
+      - name: Record sync status
+        id: set-status
+        run: |
+          if [ $? -eq 0 ]; then
+            echo "run-status=success" >> $GITHUB_OUTPUT
+          else
+            echo "run-status=failure" >> $GITHUB_OUTPUT
+          fi
+
+  notify:
+    needs: sync-repo
+    runs-on: ubuntu-latest
+    
+    steps:
+      # 发送 Telegram 通知
       - name: Send Telegram notification
-        uses: appleboy/telegram-action@master
-        if: always()  # 无论成功失败都发送通知
+        uses: appleboy/telegram-action@v1
         with:
           to: ${{ secrets.TG_CHAT_ID }}
           token: ${{ secrets.TG_TOKEN }}
           message: |
-            ${{ job.status }} - 仓库同步完成
-            仓库: 13ztop/tvbox
-            状态: ${{ job.status }}
-            触发方式: ${{ github.event_name }}
-            时间: ${{ steps.get-timestamp.outputs.time }}
-        env:
-          TELEGRAM_FILTER: 'commit,mention'
-
-  get-timestamp:
-    runs-on: ubuntu-latest
-    outputs:
-      time: ${{ steps.timestamp.outputs.time }}
-    steps:
-      - name: Get current timestamp
-        id: timestamp
-        run: echo "time=$(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
+            🚦 同步结果: ${{ needs.sync-repo.outputs.run-status }}
+            📦 仓库: 13ztop/tvbox
+            🕒 时间: ${{ needs.sync-repo.outputs.timestamp }}
+            
+            ${{ contains(needs.sync-repo.outputs.run-status, 'success') && '✅ 同步成功!' || '❌ 同步失败!' }}
+            
+            详细信息: https://github.com/13ztop/tvbox/actions
