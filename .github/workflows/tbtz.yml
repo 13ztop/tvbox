@@ -74,17 +74,10 @@ jobs:
           git config user.name "GitHub Actions Sync Bot"
           git config user.email "github-actions-sync-bot@users.noreply.github.com"
           git add -A
-          
-          # 修正的heredoc语法部分
-          COMMIT_MSG=$(cat <<EOF
-Sync: ${{ env.SOURCE_REPO_OWNER }}/${{ env.SOURCE_REPO_NAME }}@${{ env.SOURCE_SHORT }}
+          git commit -m "Sync: ${{ env.SOURCE_REPO_OWNER }}/${{ env.SOURCE_REPO_NAME }}@${{ env.SOURCE_SHORT }}
 
-• Updated ${{ steps.change_detection.outputs.changes_count }} files
-• Excluded README.md and .github/workflows/
-EOF
-          )
-          
-          git commit -m "$COMMIT_MSG"
+          • Updated ${{ steps.change_detection.outputs.changes_count }} files
+          • Excluded README.md and .github/workflows/"
           git push origin "HEAD:${{ env.TARGET_BRANCH }}"
 
       - name: Notify Telegram - Success
