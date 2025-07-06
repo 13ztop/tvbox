@@ -2,7 +2,7 @@ name: Auto Sync from cluntop/tvbox
 
 on:
   schedule:
-    - cron: '0 */6 * * *'  # 每 6 小时运行一次
+    - cron: '0 */6 * * *'  # 每 6 小时执行一次
   workflow_dispatch:
 
 jobs:
@@ -20,11 +20,21 @@ jobs:
         scripts/
         resource/
         .gitignore
-      PR_BRANCH: sync/cluntop
 
     steps:
-      - name: Detect default branch
-        id: detect_branch
+      - name: Set source commit info
+        id: source_info
+        run: |
+          git clone --depth 1 https://github.com/cluntop/tvbox.git source-repo
+          cd source-repo
+          echo "hash=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "full_hash=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+          echo "date=$(git log -1 --format=%cd --date=format:'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Set dynamic PR branch
+        run: echo "PR_BRANCH=sync/cluntop-${{ steps.source_info.outputs.hash }}" >> $GITHUB_ENV
+
+      - name: Get default branch of target repo
         run: |
           branch=$(curl -s -H "Authorization: token ${{ secrets.SYNC_TOKEN }}" https://api.github.com/repos/13ztop/tvbox | jq -r .default_branch)
           echo "DEFAULT_BRANCH=$branch" >> $GITHUB_ENV
@@ -38,9 +48,6 @@ jobs:
           path: target-repo
           fetch-depth: 0
 
-      - name: Clone source repo
-        run: git clone --depth 1 https://github.com/cluntop/tvbox.git source-repo
-
       - name: Backup protected files
         run: |
           mkdir -p /tmp/protected
@@ -52,13 +59,13 @@ jobs:
             fi
           done <<< "${{ env.PROTECTED_PATHS }}"
 
-      - name: Sync repositories (exclude .git)
+      - name: Sync source to target
         run: rsync -av --delete --exclude='.git' source-repo/ target-repo/
 
       - name: Restore protected files
         run: rsync -av /tmp/protected/ target-repo/
 
-      - name: Detect file changes
+      - name: Detect changes and prepare PR
         id: detect_changes
         run: |
           cd target-repo
@@ -66,7 +73,6 @@ jobs:
           git config user.email "tvbox-sync@users.noreply.github.com"
           git checkout -b ${{ env.PR_BRANCH }}
           git add -A
-
           if git diff --cached --quiet; then
             echo "changed=false" >> $GITHUB_OUTPUT
           else
@@ -84,11 +90,11 @@ jobs:
           path: target-repo
           commit-message: "🔁 同步: cluntop/tvbox 自动同步更新"
           branch: ${{ env.PR_BRANCH }}
-          title: "🔁 同步更新 cluntop/tvbox"
+          title: "🔁 同步更新 cluntop/tvbox@${{ steps.source_info.outputs.hash }}"
           body: |
             自动同步自 cluntop/tvbox 源仓库。
 
-            - 来源提交：`${{ github.sha }}`
+            - 来源提交：`${{ steps.source_info.outputs.full_hash }}`
             - 文件更新：${{ steps.detect_changes.outputs.changes }} 个
 
             请在合并前检查保留文件是否正确。
@@ -119,7 +125,7 @@ jobs:
             ```
             $(cat changed_files.txt)
             ```
-            🔁 已创建 PR: [点击查看](${{ steps.cpr.outputs.pull-request-url }})
+            🔁 PR 链接: [点击查看](${{ steps.cpr.outputs.pull-request-url }})
           parse_mode: markdown
 
       - name: Notify Telegram - No Changes
