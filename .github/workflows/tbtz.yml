@@ -123,12 +123,15 @@ jobs:
           echo "❌ 推送失败: $max_retries 次尝试后仍失败"
           exit 1
 
-      # 步骤7: 状态报告
+      # 步骤7: 状态报告 (修复版)
       - name: Report status
         if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}  # 获取作业状态
+          COMMIT_STATUS: ${{ steps.commit-changes.outputs.status || 'skipped' }}
         run: |
-          if ${{ success() }}; then
-            if [ "${{ steps.commit-changes.outputs.status }}" = "no changes" ]; then
+          if [ "$JOB_STATUS" = "success" ]; then
+            if [ "$COMMIT_STATUS" = "no changes" ]; then
               echo "✅ 同步完成: 无变更"
             else
               echo "✅ 同步完成: 变更已成功推送"
@@ -139,4 +142,5 @@ jobs:
             echo "1. 确认 SYNC_TOKEN 有 'repo' 权限"
             echo "2. 检查目标仓库是否存在"
             echo "3. 验证文件路径是否正确"
+            echo "4. 检查源仓库提交引用 '${{ env.SOURCE_REF }}' 是否有效"
           fi
