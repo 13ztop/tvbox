@@ -1,121 +1,142 @@
-name: Optimized TVBoxTG Sync
+name: Repository Sync and Update
 
 on:
+  workflow_dispatch:  # 允许手动触发
   schedule:
-    - cron: '0 0 * * *'
-  workflow_dispatch:
+    - cron: '0 0 * * *'  # 每天UTC午夜自动运行
+
+permissions:
+  contents: write  # 必需写入权限
+
+env:
+  SOURCE_REPO: "cluntop/tvbox"
+  TARGET_REPO: "your-username/target-repo"  # 替换为您的目标仓库
+  SOURCE_REF: "2a85561"  # 源仓库指定提交
+  COMMIT_MSG: "Sync: cluntop/tvbox@2a85561"
+  SYNC_USER: "sync-bot"  # 同步操作使用的用户名
 
 jobs:
-  sync:
+  sync-and-update:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      SOURCE_REPO_OWNER: "cluntop"
-      SOURCE_REPO_NAME: "tvbox"
-      TARGET_REPO_OWNER: "13ztop"
-      TARGET_REPO_NAME: "tvbox"
-      TARGET_FULL_REPO: "13ztop/tvbox"
-      TZ: Asia/Shanghai
-
     steps:
-      - name: Checkout target repository
+      # 步骤1: 检出源仓库
+      - name: Checkout source repository (${{ env.SOURCE_REPO }})
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.TARGET_FULL_REPO }}
-          token: ${{ secrets.SYNC_TOKEN }}
+          repository: ${{ env.SOURCE_REPO }}
+          ref: ${{ env.SOURCE_REF }}
+          token: ${{ secrets.SYNC_TOKEN }}  # 使用 SYNC_TOKEN
+          path: source-repo
+          fetch-depth: 0  # 获取完整历史记录
+
+      # 步骤2: 检出目标仓库
+      - name: Checkout target repository (${{ env.TARGET_REPO }})
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.TARGET_REPO }}
+          token: ${{ secrets.SYNC_TOKEN }}  # 使用 SYNC_TOKEN
           path: target-repo
+          fetch-depth: 0
 
-      - name: Setup environment
-        id: setup
+      # 步骤3: 文件同步操作
+      - name: Synchronize files
         run: |
-          TARGET_BRANCH=$(git -C target-repo rev-parse --abbrev-ref HEAD)
-          echo "TARGET_BRANCH=$TARGET_BRANCH" >> $GITHUB_ENV
-          echo "target_branch=$TARGET_BRANCH" >> $GITHUB_OUTPUT
+          echo "📂 同步文件操作开始..."
+          
+          # 删除旧的工作流文件
+          rm -fv target-repo/.github/workflows/static.yml
+          rm -fv target-repo/.github/workflows/sync.yml
+          rm -fv target-repo/.github/workflows/tv_run.yml
+          rm -fv target-repo/.github/workflows/zip.yml
+          
+          # 创建新的工作流文件
+          mkdir -p target-repo/.github/workflows
+          touch target-repo/.github/workflows/tbtz.yml
+          echo "✅ 创建 tbtz.yml"
+          
+          # 使用rsync高效同步文件
+          echo "🔄 同步源仓库内容..."
+          rsync -av --delete source-repo/ target-repo/ \
+            --exclude='.git/' \
+            --exclude='.github/workflows/static.yml' \
+            --exclude='.github/workflows/sync.yml' \
+            --exclude='.github/workflows/tv_run.yml' \
+            --exclude='.github/workflows/zip.yml'
+          
+          echo "✅ 文件同步完成"
 
-          SOURCE_COMMIT=$(curl -s "https://api.github.com/repos/${{ env.SOURCE_REPO_OWNER }}/${{ env.SOURCE_REPO_NAME }}/commits/main" | jq -r .sha)
-          SOURCE_SHORT=${SOURCE_COMMIT:0:7}
-          echo "SOURCE_COMMIT=$SOURCE_COMMIT" >> $GITHUB_ENV
-          echo "SOURCE_SHORT=$SOURCE_SHORT" >> $GITHUB_ENV
-          echo "source_commit=$SOURCE_COMMIT" >> $GITHUB_OUTPUT
-          echo "source_short=$SOURCE_SHORT" >> $GITHUB_OUTPUT
-
-      - name: Clone source repository
+      # 步骤4: 配置Git环境
+      - name: Configure Git
+        working-directory: target-repo
         run: |
-          git clone --depth 1 --filter=blob:none \
-            "https://github.com/${{ env.SOURCE_REPO_OWNER }}/${{ env.SOURCE_REPO_NAME }}.git" source-repo
+          git config user.name "${{ env.SYNC_USER }}"
+          git config user.email "actions@users.noreply.github.com"
+          git config pull.rebase true
+          git remote set-url origin https://${{ env.SYNC_USER }}:${{ secrets.SYNC_TOKEN }}@github.com/${{ env.TARGET_REPO }}.git
+          echo "🔧 Git配置完成"
 
-      - name: Smart sync with rsync
+      # 步骤5: 提交变更
+      - name: Commit changes
+        id: commit-changes
+        working-directory: target-repo
         run: |
-          sudo apt-get update && sudo apt-get install -y rsync
-          EXCLUDE_FILE="/tmp/exclude-list.txt"
-          echo "README.md" > $EXCLUDE_FILE
-          echo ".github/" >> $EXCLUDE_FILE
-          rsync -av --delete --exclude-from="$EXCLUDE_FILE" source-repo/ target-repo/
-
-      - name: Detect changes
-        id: change_detection
-        run: |
-          cd target-repo
-          git config user.name "GitHub Actions Sync Bot"
-          git config user.email "github-actions-sync-bot@users.noreply.github.com"
+          # 添加所有变更
           git add -A
-          if git diff --cached --exit-code --quiet; then
-            echo "no_changes=true" >> $GITHUB_OUTPUT
+          
+          # 检查是否有变更
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "status=no changes" >> $GITHUB_OUTPUT
+            echo "🟢 无变更需要提交"
           else
-            echo "has_changes=true" >> $GITHUB_OUTPUT
-            CHANGES_COUNT=$(git diff --cached --name-only | wc -l)
-            echo "changes_count=$CHANGES_COUNT" >> $GITHUB_OUTPUT
+            git commit -m "${{ env.COMMIT_MSG }}"
+            echo "status=changes committed" >> $GITHUB_OUTPUT
+            echo "🔵 变更已提交: ${{ env.COMMIT_MSG }}"
+            echo "📝 变更详情:"
+            git show --stat
           fi
 
-      - name: Commit and push changes
-        if: steps.change_detection.outputs.has_changes == 'true'
+      # 步骤6: 推送变更
+      - name: Push changes
+        if: steps.commit-changes.outputs.status == 'changes committed'
+        working-directory: target-repo
         run: |
-          cd target-repo
-          git config user.name "GitHub Actions Sync Bot"
-          git config user.email "github-actions-sync-bot@users.noreply.github.com"
-          git add -A
-          git commit -m "Sync: ${{ env.SOURCE_REPO_OWNER }}/${{ env.SOURCE_REPO_NAME }}@${{ env.SOURCE_SHORT }}
+          # 先拉取最新变更避免冲突
+          echo "⬇️ 拉取最新变更..."
+          git pull origin main
+          
+          # 带重试机制的推送
+          echo "⬆️ 推送变更到仓库..."
+          n=0
+          max_retries=3
+          delay=5
+          
+          while [ $n -lt $max_retries ]; do
+            git push origin main && {
+              echo "✅ 推送成功"
+              exit 0
+            }
+            n=$((n+1))
+            echo "🔄 推送尝试 $n 失败，${delay}秒后重试..."
+            sleep $delay
+          done
+          
+          echo "❌ 推送失败: $max_retries 次尝试后仍失败"
+          exit 1
 
-          • Updated ${{ steps.change_detection.outputs.changes_count }} files
-          • Excluded README.md and .github/workflows/"
-          git push origin "HEAD:${{ env.TARGET_BRANCH }}"
-
-      - name: Notify Telegram - Success
-        if: success()
-        uses: appleboy/telegram-action@master
-        with:
-          to: ${{ secrets.TELEGRAM_CHAT_ID }}
-          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          format: markdown
-          message: |
-            ${{ steps.change_detection.outputs.has_changes == 'true' && '✅ TVBoxTG 同步成功' || 'ℹ️ TVBoxTG 无变更' }} | ${{ env.TZ }}
-            ━━━━━━━━━━━━━━━━━━━━━━━━
-            🔄 *源仓库*: ${{ env.SOURCE_REPO_OWNER }}/${{ env.SOURCE_REPO_NAME }}
-            📦 *目标仓库*: ${{ env.TARGET_REPO_OWNER }}/${{ env.TARGET_REPO_NAME }}
-            ━━━━━━━━━━━━━━━━━━━━━━━━
-            ${{ steps.change_detection.outputs.has_changes == 'true' && format('📂 *变更文件*: {0} 个', steps.change_detection.outputs.changes_count) || '🆗 *同步状态*: 内容一致，无需更新' }}
-            🔒 *排除文件*: README.md, .github/workflows/
-            🕒 *执行时间*: $(date +'%Y-%m-%d %H:%M:%S')
-            ━━━━━━━━━━━━━━━━━━━━━━━━
-            ${{ steps.change_detection.outputs.has_changes == 'true' && '🎉 仓库已更新!' || '👍 仓库已是最新状态!' }}
-
-      - name: Notify Telegram - Failure
-        if: failure()
-        uses: appleboy/telegram-action@master
-        with:
-          to: ${{ secrets.TELEGRAM_CHAT_ID }}
-          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          format: markdown
-          message: |
-            ‼️ *TVBoxTG 同步失败* | ${{ env.TZ }}
-            ━━━━━━━━━━━━━━━━━━━━━━━━
-            ⚙️ *工作流*: ${{ github.workflow }}
-            🕒 *发生时间*: $(date +'%Y-%m-%d %H:%M:%S')
-            ━━━━━━━━━━━━━━━━━━━━━━━━
-            ❌ *错误详情*: 请检查工作流日志
-
-      - name: Cleanup
+      # 步骤7: 状态报告
+      - name: Report status
         if: always()
         run: |
-          rm -rf source-repo target-repo
-          rm -f /tmp/exclude-list.txt
+          if ${{ success() }}; then
+            if [ "${{ steps.commit-changes.outputs.status }}" = "no changes" ]; then
+              echo "✅ 同步完成: 无变更"
+            else
+              echo "✅ 同步完成: 变更已成功推送"
+            fi
+          else
+            echo "❌ 同步失败: 请检查之前的步骤"
+            echo "诊断建议:"
+            echo "1. 确认 SYNC_TOKEN 有 'repo' 权限"
+            echo "2. 检查目标仓库是否存在"
+            echo "3. 验证文件路径是否正确"
+          fi
