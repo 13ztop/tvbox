@@ -2,93 +2,77 @@ name: Sync upstream repository
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # 每天 UTC 0 点自动同步
+    - cron: '0 0 * * *'  # 每天UTC 0点自动同步
   workflow_dispatch:      # 允许手动触发
 
 jobs:
   sync-repo:
     runs-on: ubuntu-latest
+    timeout-minutes: 3    # 关键防护：3分钟超时强制终止
     outputs:
-      run-status: ${{ job.status }}
-      timestamp: ${{ steps.get-timestamp.outputs.time }}
+      sync-status: ${{ steps.result.outputs.status }}
 
     steps:
-      # 获取当前时间戳 (优化放在第一步)
-      - name: Get current timestamp
-        id: get-timestamp
-        run: echo "time=$(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
-
-      # 检出目标仓库
-      - name: Checkout target repo
-        uses: actions/checkout@v4
+      - name: Start timer
+        uses: gerred/actions/use-current-time@master
+        id: timer-start
+      
+      # 1. 同步上游仓库
+      - name: Sync repository
+        uses: repo-sync/github-sync@v2
         with:
-          repository: 13ztop/tvbox
-          token: ${{ secrets.SYNC_TOKEN }}
-          path: target
+          source_repo: "cluntop/tvbox"
+          destination_repo: "13ztop/tvbox"
+          github_token: ${{ secrets.SYNC_TOKEN }}
+          force: true
+          exclude: |
+            README.md
+            .github/workflows/*
 
-      # 克隆源仓库
-      - name: Clone source repo
-        run: git clone --depth 1 https://github.com/cluntop/tvbox.git source
-
-      # 同步并排除文件
-      - name: Sync with exclusions
-        run: |
-          # 删除需要排除的内容
-          rm -rf source/README.md source/.github/workflows
-
-          # 移动所有文件
-          mv -f source/* target/ > /dev/null 2>&1 || :
-          mv -f source/.* target/ > /dev/null 2>&1 || :
-
-          # 配置 Git 身份
-          cd target
-          git config user.name "Sync Bot"
-          git config user.email "actions@github.com"
-          
-          # 检测是否有变更
-          if git diff --quiet --exit-code; then
-            echo "没有检测到变更" > $GITHUB_STEP_SUMMARY
-            exit 0
-          fi
-          
-          # 提交变更
-          git add --all
-          git commit -m "chore: auto-sync (${{ steps.get-timestamp.outputs.time }})"
-
-      # 推送更改
-      - name: Push changes
-        run: |
-          cd target
-          git push
-        env:
-          GITHUB_TOKEN: ${{ secrets.SYNC_TOKEN }}
-
-      # 记录同步状态
-      - name: Record sync status
-        id: set-status
+      # 2. 记录执行结果
+      - name: Set result status
+        id: result
         run: |
           if [ $? -eq 0 ]; then
-            echo "run-status=success" >> $GITHUB_OUTPUT
+            echo "status=success" >> $GITHUB_OUTPUT
           else
-            echo "run-status=failure" >> $GITHUB_OUTPUT
+            echo "status=failure" >> $GITHUB_OUTPUT
           fi
+      
+      # 3. 结束计时
+      - name: Stop timer
+        uses: gerred/actions/use-current-time@master
+        id: timer-stop
 
+  # 4. Telegram通知（独立作业）
   notify:
     needs: sync-repo
     runs-on: ubuntu-latest
+    outputs:
+      duration: ${{ steps.calc-duration.outputs.value }}
     
     steps:
-      # 发送 Telegram 通知
+      - name: Calculate duration
+        id: calc-duration
+        run: |
+          START=${{ needs.sync-repo.outputs.timer-start }}
+          END=${{ needs.sync-repo.outputs.timer-stop }}
+          DURATION=$(( END - START ))
+          echo "value=$DURATION" >> $GITHUB_OUTPUT
+      
       - name: Send Telegram notification
         uses: appleboy/telegram-action@v1
         with:
-          to: ${{ secrets.TG_CHAT_ID }}
           token: ${{ secrets.TG_TOKEN }}
+          to: ${{ secrets.TG_CHAT_ID }}
           message: |
-            🚦 同步结果: ${{ needs.sync-repo.outputs.run-status }}
-            📦 仓库: 13ztop/tvbox
-            🕒 时间: ${{ needs.sync-repo.outputs.timestamp }}
-            
-            ${{ contains(needs.sync-repo.outputs.run-status, 'success') && '✅ 同步成功!' || '❌ 同步失败!' }}
-            
-            详细信息: https://github.com/13ztop/tvbox/actions
+            ⚡️ *仓库同步报告*
+            -------------------------------
+            • 任务: \`Sync upstream repository\`
+            • 仓库: [13ztop/tvbox](https://github.com/13ztop/tvbox)
+            • 状态: `${{ needs.sync-repo.outputs.sync-status }}`
+            • 耗时: ${{ needs.notify.outputs.duration }} 秒
+            • 触发方式: \`${{ github.event_name }}\`
+            -------------------------------
+            ${{ needs.sync-repo.outputs.sync-status == 'success' && '✅ 同步成功！' || '❌ 同步失败！请检查日志：' }}
+            ${{ needs.sync-repo.outputs.sync-status != 'success' && format('https://github.com/13ztop/tvbox/actions/runs/{0}', github.run_id) }}
