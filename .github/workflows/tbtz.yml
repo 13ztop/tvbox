@@ -100,7 +100,7 @@ jobs:
           
           echo "✅ 同步完成"
 
-      # 5. 检测变更
+      # 5. 检测变更（添加变更文件链接）
       - name: Detect changes
         id: change_detection
         run: |
@@ -118,9 +118,36 @@ jobs:
             echo "has_changes=true" >> $GITHUB_OUTPUT
             echo "changes_count=$changes" >> $GITHUB_OUTPUT
             
+            # 获取变更文件列表（最多8个）
+            changed_files=$(git diff --cached --name-only | head -8)
+            
+            # 生成带链接的文件列表
+            file_links=""
+            while IFS= read -r file; do
+              if [ -n "$file" ]; then
+                # URL编码文件名（处理空格等特殊字符）
+                encoded_file=$(printf '%s' "$file" | jq -sRr @uri)
+                # 生成GitHub文件链接
+                file_link="[$file](https://github.com/${{ env.TARGET_REPO }}/blob/${{ env.TARGET_BRANCH }}/$encoded_file)"
+                file_links="${file_links}• $file_link"$'\n'
+              fi
+            done <<< "$changed_files"
+            
+            # 如果变更超过8个，添加省略号
+            if [ $changes -gt 8 ]; then
+              file_links="${file_links}• ...等 $changes 个文件"
+            fi
+            
+            echo "file_links<<EOF" >> $GITHUB_OUTPUT
+            echo "$file_links" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+            
             # 显示变更摘要
             echo "📝 变更文件列表:"
-            git diff --cached --name-only
+            echo "$changed_files"
+            if [ $changes -gt 8 ]; then
+              echo "...等 $changes 个文件"
+            fi
           else
             echo "✅ 未检测到变更"
             echo "no_changes=true" >> $GITHUB_OUTPUT
@@ -152,7 +179,7 @@ jobs:
           echo "CURRENT_TIME_SHORT=$TZ_SHORT" >> $GITHUB_ENV
           echo "CURRENT_TIME_FULL=$TZ_FULL" >> $GITHUB_ENV
 
-      # 8. 统一通知
+      # 8. 统一通知（添加文件链接）
       - name: Notify Telegram
         if: success()
         uses: appleboy/telegram-action@master
@@ -170,9 +197,13 @@ jobs:
             ${{ steps.change_detection.outputs.has_changes && format('📂 **变更文件**: {0} 个', steps.change_detection.outputs.changes_count) || '🆗 **同步状态**: 内容一致，无需更新' }}
             🔒 **保留文件**: ${{ steps.file_protection.outputs.count }} 个
             🕒 **执行时间**: ${{ env.CURRENT_TIME_FULL }}
+            
+            ${{ steps.change_detection.outputs.has_changes && '📝 **变更摘要**:' }}
+            ${{ steps.change_detection.outputs.has_changes && steps.change_detection.outputs.file_links }}
+            
             ━━━━━━━━━━━━━━━━━━━━━━━━
             ${{ steps.change_detection.outputs.has_changes && '✅ 同步完成! 仓库已更新' || '✅ 仓库已是最新状态' }}
-            [查看仓库](https://github.com/${{ env.TARGET_REPO }})
+            [查看完整变更](https://github.com/${{ env.TARGET_REPO }}/commit/${{ steps.change_detection.outputs.has_changes && env.full_sha || steps.setup.outputs.source_commit }})
 
       # 9. 错误通知
       - name: Error notification
