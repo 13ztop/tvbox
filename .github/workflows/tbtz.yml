@@ -2,7 +2,7 @@ name: TVBox Auto Sync
 
 on:
   schedule:
-  - cron: '0 */6 * * *'  # 每6小时同步一次
+    - cron: '0 0 * * *'  # 每天UTC时间0点（北京时间8点）自动同步
   workflow_dispatch:      # 允许手动触发
 
 jobs:
@@ -34,24 +34,24 @@ jobs:
       # 2. 克隆仓库
       - name: Clone repositories
         run: |
-          echo "正在克隆源仓库..."
+          echo "📥 正在克隆源仓库..."
           git clone --depth 1 --filter=blob:none \
             "https://github.com/${{ env.SOURCE_REPO }}.git" source-repo
             
-          echo "正在克隆目标仓库..."
+          echo "📥 正在克隆目标仓库..."
           git clone --depth 1 --branch "${{ env.TARGET_BRANCH }}" \
             "https://${{ secrets.SYNC_TOKEN }}@github.com/${{ env.TARGET_REPO }}.git" target-repo
           
           # 显示克隆结果
-          echo "源仓库版本: $(cd source-repo && git rev-parse --short HEAD)"
-          echo "目标仓库版本: $(cd target-repo && git rev-parse --short HEAD)"
+          echo "🔹 源仓库版本: $(cd source-repo && git rev-parse --short HEAD)"
+          echo "🔹 目标仓库版本: $(cd target-repo && git rev-parse --short HEAD)"
 
       # 3. 识别保护文件
       - name: Identify protected files
         id: file_protection
         run: |
           cd target-repo
-          echo "正在识别保护文件..."
+          echo "🛡️ 正在识别保护文件..."
           
           # 创建保护文件列表
           PROTECTED_LIST=(
@@ -75,37 +75,37 @@ jobs:
           
           protected_count=${#PROTECTED_LIST[@]}
           echo "count=$protected_count" >> $GITHUB_OUTPUT
-          echo "已识别 $protected_count 个保护文件:"
+          echo "🛡️ 已识别 $protected_count 个保护文件:"
           cat /tmp/protected-list.txt
 
-      # 4. 智能同步（包含内容变更检测）
+      # 4. 智能同步
       - name: Smart sync with rsync
         run: |
-          echo "安装rsync..."
+          echo "🔄 安装rsync..."
           sudo apt-get install -y rsync
           
-          echo "创建排除列表..."
+          echo "📝 创建排除列表..."
           EXCLUDE_FILE="/tmp/exclude-list.txt"
           echo ".git" > $EXCLUDE_FILE
           echo ".github" >> $EXCLUDE_FILE
           cat /tmp/protected-list.txt >> $EXCLUDE_FILE
           
-          echo "排除列表内容:"
+          echo "📋 排除列表内容:"
           cat $EXCLUDE_FILE
           
-          echo "开始同步..."
+          echo "🚀 开始同步..."
           rsync -av --checksum --delete \
             --exclude-from="$EXCLUDE_FILE" \
             source-repo/ target-repo/
           
-          echo "同步完成"
+          echo "✅ 同步完成"
 
       # 5. 检测变更
       - name: Detect changes
         id: change_detection
         run: |
           cd target-repo
-          echo "检测文件变更..."
+          echo "🔍 检测文件变更..."
           
           git config user.name "TVBox Sync Bot"
           git config user.email "tvbox-sync@users.noreply.github.com"
@@ -114,15 +114,15 @@ jobs:
           changes=$(git status --porcelain | wc -l)
           
           if [ $changes -gt 0 ]; then
-            echo "检测到 $changes 个变更"
+            echo "🔄 检测到 $changes 个变更"
             echo "has_changes=true" >> $GITHUB_OUTPUT
             echo "changes_count=$changes" >> $GITHUB_OUTPUT
             
             # 显示变更摘要
-            echo "变更文件列表:"
+            echo "📝 变更文件列表:"
             git diff --cached --name-only
           else
-            echo "未检测到变更"
+            echo "✅ 未检测到变更"
             echo "no_changes=true" >> $GITHUB_OUTPUT
           fi
 
@@ -131,7 +131,7 @@ jobs:
         if: steps.change_detection.outputs.has_changes == 'true'
         run: |
           cd target-repo
-          echo "正在提交变更..."
+          echo "💾 正在提交变更..."
           
           commit_msg="📺 Auto Sync: ${{ env.SOURCE_REPO }}@${{ steps.setup.outputs.source_short }}"
           commit_msg+=$'\n\n• 更新 '"${{ steps.change_detection.outputs.changes_count }}"$' 个文件'
@@ -140,7 +140,7 @@ jobs:
           git commit -m "$commit_msg"
           git push origin "${{ env.TARGET_BRANCH }}"
           
-          echo "提交成功: $commit_msg"
+          echo "✅ 提交成功: $commit_msg"
           echo "commit_sha=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
           echo "full_sha=$(git rev-parse HEAD)" >> $GITHUB_ENV
 
@@ -152,11 +152,11 @@ jobs:
           echo "CURRENT_TIME_SHORT=$TZ_SHORT" >> $GITHUB_ENV
           echo "CURRENT_TIME_FULL=$TZ_FULL" >> $GITHUB_ENV
 
-      # 8. 统一通知系统
+      # 8. 统一通知
       - name: Notify Telegram
         if: success()
         uses: appleboy/telegram-action@master
-        continue-on-error: true  # 即使通知失败也不影响工作流
+        continue-on-error: true
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -174,11 +174,11 @@ jobs:
             ${{ steps.change_detection.outputs.has_changes && '✅ 同步完成! 仓库已更新' || '✅ 仓库已是最新状态' }}
             [查看仓库](https://github.com/${{ env.TARGET_REPO }})
 
-      # 9. 错误处理
+      # 9. 错误通知
       - name: Error notification
         if: failure()
         uses: appleboy/telegram-action@master
-        continue-on-error: true  # 即使通知失败也不影响工作流
+        continue-on-error: true
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -199,7 +199,7 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          echo "清理工作区..."
+          echo "🧹 清理工作区..."
           rm -rf source-repo target-repo
           rm -f /tmp/protected-list.txt /tmp/exclude-list.txt
-          echo "清理完成"
+          echo "✅ 清理完成"
