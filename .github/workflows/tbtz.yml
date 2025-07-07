@@ -18,7 +18,7 @@ jobs:
       - name: Setup environment
         id: setup
         run: |
-          # 获取目标仓库默认分支
+          # 获取目标仓库默认分支（默认为main）
           target_branch=$(curl -s -H "Authorization: token ${{ secrets.SYNC_TOKEN }}" \
             "https://api.github.com/repos/${{ env.TARGET_REPO }}" | jq -r .default_branch || echo "main")
           
@@ -29,27 +29,29 @@ jobs:
           echo "target_branch=$target_branch" >> $GITHUB_OUTPUT
           echo "source_commit=$source_commit" >> $GITHUB_OUTPUT
           echo "source_short=$source_short" >> $GITHUB_OUTPUT
-          
-          # 设置目标分支默认值
-          if [ -z "$target_branch" ]; then
-            target_branch="main"
-          fi
           echo "TARGET_BRANCH=$target_branch" >> $GITHUB_ENV
 
       # 2. 克隆仓库
       - name: Clone repositories
         run: |
+          echo "正在克隆源仓库..."
           git clone --depth 1 --filter=blob:none \
             "https://github.com/${{ env.SOURCE_REPO }}.git" source-repo
             
+          echo "正在克隆目标仓库..."
           git clone --depth 1 --branch "${{ env.TARGET_BRANCH }}" \
             "https://${{ secrets.SYNC_TOKEN }}@github.com/${{ env.TARGET_REPO }}.git" target-repo
+          
+          # 显示克隆结果
+          echo "源仓库版本: $(cd source-repo && git rev-parse --short HEAD)"
+          echo "目标仓库版本: $(cd target-repo && git rev-parse --short HEAD)"
 
       # 3. 识别保护文件
       - name: Identify protected files
         id: file_protection
         run: |
           cd target-repo
+          echo "正在识别保护文件..."
           
           # 创建保护文件列表
           PROTECTED_LIST=(
@@ -64,6 +66,8 @@ jobs:
             "plugins/*"
             ".gitignore"
             ".env"
+            "my_config.json"     # 添加您的自定义配置文件
+            "private_keys/*"      # 添加您的私钥目录
           )
           
           # 写入保护文件列表
@@ -71,33 +75,37 @@ jobs:
           
           protected_count=${#PROTECTED_LIST[@]}
           echo "count=$protected_count" >> $GITHUB_OUTPUT
-          echo "保护文件列表:"
+          echo "已识别 $protected_count 个保护文件:"
           cat /tmp/protected-list.txt
 
-      # 4. 智能同步
+      # 4. 智能同步（包含内容变更检测）
       - name: Smart sync with rsync
         run: |
+          echo "安装rsync..."
           sudo apt-get install -y rsync
           
-          # 创建排除列表
+          echo "创建排除列表..."
           EXCLUDE_FILE="/tmp/exclude-list.txt"
           echo ".git" > $EXCLUDE_FILE
           echo ".github" >> $EXCLUDE_FILE
           cat /tmp/protected-list.txt >> $EXCLUDE_FILE
           
-          echo "排除列表:"
+          echo "排除列表内容:"
           cat $EXCLUDE_FILE
           
-          # 执行同步
-          rsync -av --delete \
+          echo "开始同步..."
+          rsync -av --checksum --delete \
             --exclude-from="$EXCLUDE_FILE" \
             source-repo/ target-repo/
+          
+          echo "同步完成"
 
       # 5. 检测变更
       - name: Detect changes
         id: change_detection
         run: |
           cd target-repo
+          echo "检测文件变更..."
           
           git config user.name "TVBox Sync Bot"
           git config user.email "tvbox-sync@users.noreply.github.com"
@@ -106,9 +114,15 @@ jobs:
           changes=$(git status --porcelain | wc -l)
           
           if [ $changes -gt 0 ]; then
+            echo "检测到 $changes 个变更"
             echo "has_changes=true" >> $GITHUB_OUTPUT
             echo "changes_count=$changes" >> $GITHUB_OUTPUT
+            
+            # 显示变更摘要
+            echo "变更文件列表:"
+            git diff --cached --name-only
           else
+            echo "未检测到变更"
             echo "no_changes=true" >> $GITHUB_OUTPUT
           fi
 
@@ -117,11 +131,16 @@ jobs:
         if: steps.change_detection.outputs.has_changes == 'true'
         run: |
           cd target-repo
+          echo "正在提交变更..."
           
           commit_msg="📺 Auto Sync: ${{ env.SOURCE_REPO }}@${{ steps.setup.outputs.source_short }}"
+          commit_msg+=$'\n\n• 更新 '"${{ steps.change_detection.outputs.changes_count }}"$' 个文件'
+          commit_msg+=$'\n• 保留 '"${{ steps.file_protection.outputs.count }}"$' 个自定义文件'
+          
           git commit -m "$commit_msg"
           git push origin "${{ env.TARGET_BRANCH }}"
           
+          echo "提交成功: $commit_msg"
           echo "commit_sha=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
           echo "full_sha=$(git rev-parse HEAD)" >> $GITHUB_ENV
 
@@ -129,11 +148,13 @@ jobs:
       - name: Set Shanghai time
         run: |
           TZ_SHORT=$(TZ='Asia/Shanghai' date +'%H:%M %Z')
+          TZ_FULL=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S %Z')
           echo "CURRENT_TIME_SHORT=$TZ_SHORT" >> $GITHUB_ENV
+          echo "CURRENT_TIME_FULL=$TZ_FULL" >> $GITHUB_ENV
 
       # 8. 通知系统
       - name: Notify Telegram
-        if: success()
+        if: success() && secrets.TELEGRAM_BOT_TOKEN
         uses: appleboy/telegram-action@master
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -147,12 +168,13 @@ jobs:
             ━━━━━━━━━━━━━━━━━━━━━━━━
             ${{ steps.change_detection.outputs.has_changes && format('📂 **变更文件**: {0} 个', steps.change_detection.outputs.changes_count) || '🆗 **同步状态**: 内容一致，无需更新' }}
             🔒 **保留文件**: ${{ steps.file_protection.outputs.count }} 个
+            🕒 **执行时间**: ${{ env.CURRENT_TIME_FULL }}
             ━━━━━━━━━━━━━━━━━━━━━━━━
             [查看仓库](https://github.com/${{ env.TARGET_REPO }})
 
       # 9. 错误处理
       - name: Error notification
-        if: failure()
+        if: failure() && secrets.TELEGRAM_BOT_TOKEN
         uses: appleboy/telegram-action@master
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -162,13 +184,18 @@ jobs:
             ‼️ *TVBox 同步失败 | ${{ env.CURRENT_TIME_SHORT }}*
             ━━━━━━━━━━━━━━━━━━━━━━━━
             ⚙️ **工作流**: [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            🔄 **源仓库**: [${{ env.SOURCE_REPO }}](https://github.com/${{ env.SOURCE_REPO }})
+            📦 **目标仓库**: [${{ env.TARGET_REPO }}](https://github.com/${{ env.TARGET_REPO }})
             ━━━━━━━━━━━━━━━━━━━━━━━━
-            ❌ 错误详情: 请检查工作流日志
+            🕒 **发生时间**: ${{ env.CURRENT_TIME_FULL }}
+            ❌ **错误详情**: 请检查工作流日志
             [立即查看](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
       # 10. 清理工作区
       - name: Cleanup
         if: always()
         run: |
+          echo "清理工作区..."
           rm -rf source-repo target-repo
           rm -f /tmp/protected-list.txt /tmp/exclude-list.txt
+          echo "清理完成"
