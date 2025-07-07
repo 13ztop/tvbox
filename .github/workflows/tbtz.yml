@@ -152,29 +152,50 @@ jobs:
           echo "CURRENT_TIME_SHORT=$TZ_SHORT" >> $GITHUB_ENV
           echo "CURRENT_TIME_FULL=$TZ_FULL" >> $GITHUB_ENV
 
-      # 8. 通知系统
-      - name: Notify Telegram
-        if: success() && secrets.TELEGRAM_BOT_TOKEN
+      # 8. 通知系统 (修复secrets引用问题)
+      - name: Notify Telegram on success
+        if: success() && steps.change_detection.outputs.has_changes == 'true'
         uses: appleboy/telegram-action@master
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           format: markdown
           message: |
-            ${{ steps.change_detection.outputs.has_changes && '📺 TVBox 同步成功' || 'ℹ️ TVBox 无变更' }} | ${{ env.CURRENT_TIME_SHORT }}
+            📺 TVBox 同步成功 | ${{ env.CURRENT_TIME_SHORT }}
             ━━━━━━━━━━━━━━━━━━━━━━━━
             🔄 **源仓库**: [${{ env.SOURCE_REPO }}@${{ steps.setup.outputs.source_short }}](https://github.com/${{ env.SOURCE_REPO }}/commit/${{ steps.setup.outputs.source_commit }})
-            📦 **目标仓库**: [${{ env.TARGET_REPO }}@${{ steps.change_detection.outputs.has_changes && env.commit_sha || steps.setup.outputs.source_short }}](https://github.com/${{ env.TARGET_REPO }}/commit/${{ steps.change_detection.outputs.has_changes && env.full_sha || steps.setup.outputs.source_commit }})
+            📦 **目标仓库**: [${{ env.TARGET_REPO }}@${{ env.commit_sha }}](https://github.com/${{ env.TARGET_REPO }}/commit/${{ env.full_sha }})
             ━━━━━━━━━━━━━━━━━━━━━━━━
-            ${{ steps.change_detection.outputs.has_changes && format('📂 **变更文件**: {0} 个', steps.change_detection.outputs.changes_count) || '🆗 **同步状态**: 内容一致，无需更新' }}
+            📂 **变更文件**: ${{ steps.change_detection.outputs.changes_count }} 个
             🔒 **保留文件**: ${{ steps.file_protection.outputs.count }} 个
             🕒 **执行时间**: ${{ env.CURRENT_TIME_FULL }}
             ━━━━━━━━━━━━━━━━━━━━━━━━
+            ✅ 同步完成! 仓库已更新
             [查看仓库](https://github.com/${{ env.TARGET_REPO }})
 
-      # 9. 错误处理
+      - name: Notify Telegram on no changes
+        if: success() && steps.change_detection.outputs.no_changes == 'true'
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          format: markdown
+          message: |
+            ℹ️ TVBox 无变更 | ${{ env.CURRENT_TIME_SHORT }}
+            ━━━━━━━━━━━━━━━━━━━━━━━━
+            🔄 **源仓库**: [${{ env.SOURCE_REPO }}@${{ steps.setup.outputs.source_short }}](https://github.com/${{ env.SOURCE_REPO }}/commit/${{ steps.setup.outputs.source_commit }})
+            📦 **目标仓库**: [${{ env.TARGET_REPO }}@${{ steps.setup.outputs.source_short }}](https://github.com/${{ env.TARGET_REPO }}/commit/${{ steps.setup.outputs.source_commit }})
+            ━━━━━━━━━━━━━━━━━━━━━━━━
+            🆗 **同步状态**: 内容一致，无需更新
+            🔒 **保留文件**: ${{ steps.file_protection.outputs.count }} 个
+            🕒 **执行时间**: ${{ env.CURRENT_TIME_FULL }}
+            ━━━━━━━━━━━━━━━━━━━━━━━━
+            ✅ 仓库已是最新状态
+            [查看仓库](https://github.com/${{ env.TARGET_REPO }})
+
+      # 9. 错误处理 (修复secrets引用问题)
       - name: Error notification
-        if: failure() && secrets.TELEGRAM_BOT_TOKEN
+        if: failure()
         uses: appleboy/telegram-action@master
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
