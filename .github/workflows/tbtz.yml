@@ -2,7 +2,7 @@ name: TVBox Auto Sync
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # 每天UTC时间0点（北京时间8点）自动同步
+  - cron: '0 */6 * * *'  # 每6小时同步一次
   workflow_dispatch:      # 允许手动触发
 
 jobs:
@@ -67,7 +67,7 @@ jobs:
             ".gitignore"
             ".env"
             "my_config.json"     # 添加您的自定义配置文件
-            "private_keys/*"      # 添加您的私钥目录
+            "private_keys/*"     # 添加您的私钥目录
           )
           
           # 写入保护文件列表
@@ -152,51 +152,33 @@ jobs:
           echo "CURRENT_TIME_SHORT=$TZ_SHORT" >> $GITHUB_ENV
           echo "CURRENT_TIME_FULL=$TZ_FULL" >> $GITHUB_ENV
 
-      # 8. 通知系统 (修复secrets引用问题)
-      - name: Notify Telegram on success
-        if: success() && steps.change_detection.outputs.has_changes == 'true'
+      # 8. 统一通知系统
+      - name: Notify Telegram
+        if: success()
         uses: appleboy/telegram-action@master
+        continue-on-error: true  # 即使通知失败也不影响工作流
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           format: markdown
           message: |
-            📺 TVBox 同步成功 | ${{ env.CURRENT_TIME_SHORT }}
+            ${{ steps.change_detection.outputs.has_changes && '📺 TVBox 同步成功' || 'ℹ️ TVBox 无变更' }} | ${{ env.CURRENT_TIME_SHORT }}
             ━━━━━━━━━━━━━━━━━━━━━━━━
             🔄 **源仓库**: [${{ env.SOURCE_REPO }}@${{ steps.setup.outputs.source_short }}](https://github.com/${{ env.SOURCE_REPO }}/commit/${{ steps.setup.outputs.source_commit }})
-            📦 **目标仓库**: [${{ env.TARGET_REPO }}@${{ env.commit_sha }}](https://github.com/${{ env.TARGET_REPO }}/commit/${{ env.full_sha }})
+            📦 **目标仓库**: [${{ env.TARGET_REPO }}@${{ steps.change_detection.outputs.has_changes && env.commit_sha || steps.setup.outputs.source_short }}](https://github.com/${{ env.TARGET_REPO }}/commit/${{ steps.change_detection.outputs.has_changes && env.full_sha || steps.setup.outputs.source_commit }})
             ━━━━━━━━━━━━━━━━━━━━━━━━
-            📂 **变更文件**: ${{ steps.change_detection.outputs.changes_count }} 个
+            ${{ steps.change_detection.outputs.has_changes && format('📂 **变更文件**: {0} 个', steps.change_detection.outputs.changes_count) || '🆗 **同步状态**: 内容一致，无需更新' }}
             🔒 **保留文件**: ${{ steps.file_protection.outputs.count }} 个
             🕒 **执行时间**: ${{ env.CURRENT_TIME_FULL }}
             ━━━━━━━━━━━━━━━━━━━━━━━━
-            ✅ 同步完成! 仓库已更新
+            ${{ steps.change_detection.outputs.has_changes && '✅ 同步完成! 仓库已更新' || '✅ 仓库已是最新状态' }}
             [查看仓库](https://github.com/${{ env.TARGET_REPO }})
 
-      - name: Notify Telegram on no changes
-        if: success() && steps.change_detection.outputs.no_changes == 'true'
-        uses: appleboy/telegram-action@master
-        with:
-          to: ${{ secrets.TELEGRAM_CHAT_ID }}
-          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          format: markdown
-          message: |
-            ℹ️ TVBox 无变更 | ${{ env.CURRENT_TIME_SHORT }}
-            ━━━━━━━━━━━━━━━━━━━━━━━━
-            🔄 **源仓库**: [${{ env.SOURCE_REPO }}@${{ steps.setup.outputs.source_short }}](https://github.com/${{ env.SOURCE_REPO }}/commit/${{ steps.setup.outputs.source_commit }})
-            📦 **目标仓库**: [${{ env.TARGET_REPO }}@${{ steps.setup.outputs.source_short }}](https://github.com/${{ env.TARGET_REPO }}/commit/${{ steps.setup.outputs.source_commit }})
-            ━━━━━━━━━━━━━━━━━━━━━━━━
-            🆗 **同步状态**: 内容一致，无需更新
-            🔒 **保留文件**: ${{ steps.file_protection.outputs.count }} 个
-            🕒 **执行时间**: ${{ env.CURRENT_TIME_FULL }}
-            ━━━━━━━━━━━━━━━━━━━━━━━━
-            ✅ 仓库已是最新状态
-            [查看仓库](https://github.com/${{ env.TARGET_REPO }})
-
-      # 9. 错误处理 (修复secrets引用问题)
+      # 9. 错误处理
       - name: Error notification
         if: failure()
         uses: appleboy/telegram-action@master
+        continue-on-error: true  # 即使通知失败也不影响工作流
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -205,6 +187,7 @@ jobs:
             ‼️ *TVBox 同步失败 | ${{ env.CURRENT_TIME_SHORT }}*
             ━━━━━━━━━━━━━━━━━━━━━━━━
             ⚙️ **工作流**: [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            ━━━━━━━━━━━━━━━━━━━━━━━━
             🔄 **源仓库**: [${{ env.SOURCE_REPO }}](https://github.com/${{ env.SOURCE_REPO }})
             📦 **目标仓库**: [${{ env.TARGET_REPO }}](https://github.com/${{ env.TARGET_REPO }})
             ━━━━━━━━━━━━━━━━━━━━━━━━
