@@ -8,16 +8,18 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30   # 增加超时时间
     env:
       SOURCE_REPO: "cluntop/tvbox"
       TARGET_REPO: "13ztop/tvbox"
     
     steps:
-      # 1. 准备环境
+      # 1. 准备环境（增加详细日志）
       - name: Setup environment
         id: setup
         run: |
+          echo "$(date) - 开始准备环境..."
+          
           # 获取目标仓库默认分支（默认为main）
           target_branch=$(curl -s -H "Authorization: token ${{ secrets.SYNC_TOKEN }}" \
             "https://api.github.com/repos/${{ env.TARGET_REPO }}" | jq -r .default_branch || echo "main")
@@ -30,26 +32,38 @@ jobs:
           echo "source_commit=$source_commit" >> $GITHUB_OUTPUT
           echo "source_short=$source_short" >> $GITHUB_OUTPUT
           echo "TARGET_BRANCH=$target_branch" >> $GITHUB_ENV
+          
+          echo "目标分支: $target_branch"
+          echo "源仓库最新提交: $source_commit"
+          echo "$(date) - 环境准备完成"
 
-      # 2. 克隆仓库
+      # 2. 克隆仓库（增加超时和详细日志）
       - name: Clone repositories
+        timeout-minutes: 10  # 设置步骤级超时
         run: |
+          echo "$(date) - 开始克隆仓库..."
+          
           echo "📥 正在克隆源仓库..."
           git clone --depth 1 --filter=blob:none \
-            "https://github.com/${{ env.SOURCE_REPO }}.git" source-repo
+            "https://github.com/${{ env.SOURCE_REPO }}.git" source-repo \
+            || { echo "克隆源仓库失败"; exit 1; }
             
           echo "📥 正在克隆目标仓库..."
           git clone --depth 1 --branch "${{ env.TARGET_BRANCH }}" \
-            "https://${{ secrets.SYNC_TOKEN }}@github.com/${{ env.TARGET_REPO }}.git" target-repo
+            "https://${{ secrets.SYNC_TOKEN }}@github.com/${{ env.TARGET_REPO }}.git" target-repo \
+            || { echo "克隆目标仓库失败"; exit 1; }
           
           # 显示克隆结果
           echo "🔹 源仓库版本: $(cd source-repo && git rev-parse --short HEAD)"
           echo "🔹 目标仓库版本: $(cd target-repo && git rev-parse --short HEAD)"
+          
+          echo "$(date) - 仓库克隆完成"
 
       # 3. 识别保护文件
       - name: Identify protected files
         id: file_protection
         run: |
+          echo "$(date) - 开始识别保护文件..."
           cd target-repo
           echo "🛡️ 正在识别保护文件..."
           
@@ -77,12 +91,17 @@ jobs:
           echo "count=$protected_count" >> $GITHUB_OUTPUT
           echo "🛡️ 已识别 $protected_count 个保护文件:"
           cat /tmp/protected-list.txt
+          
+          echo "$(date) - 保护文件识别完成"
 
-      # 4. 智能同步
+      # 4. 智能同步（增加超时和详细日志）
       - name: Smart sync with rsync
+        timeout-minutes: 15  # 设置步骤级超时
         run: |
-          echo "🔄 安装rsync..."
-          sudo apt-get install -y rsync
+          echo "$(date) - 开始同步..."
+          echo "🔄 安装rsync和jq..."
+          sudo apt-get update
+          sudo apt-get install -y rsync jq
           
           echo "📝 创建排除列表..."
           EXCLUDE_FILE="/tmp/exclude-list.txt"
@@ -96,14 +115,17 @@ jobs:
           echo "🚀 开始同步..."
           rsync -av --checksum --delete \
             --exclude-from="$EXCLUDE_FILE" \
-            source-repo/ target-repo/
+            source-repo/ target-repo/ \
+            || { echo "同步失败"; exit 1; }
           
           echo "✅ 同步完成"
+          echo "$(date) - 同步完成"
 
-      # 5. 检测变更（添加变更文件链接）
+      # 5. 检测变更
       - name: Detect changes
         id: change_detection
         run: |
+          echo "$(date) - 开始检测变更..."
           cd target-repo
           echo "🔍 检测文件变更..."
           
@@ -152,11 +174,15 @@ jobs:
             echo "✅ 未检测到变更"
             echo "no_changes=true" >> $GITHUB_OUTPUT
           fi
+          
+          echo "$(date) - 变更检测完成"
 
       # 6. 提交变更
       - name: Commit and push changes
         if: steps.change_detection.outputs.has_changes == 'true'
+        timeout-minutes: 5  # 设置步骤级超时
         run: |
+          echo "$(date) - 开始提交变更..."
           cd target-repo
           echo "💾 正在提交变更..."
           
@@ -164,12 +190,13 @@ jobs:
           commit_msg+=$'\n\n• 更新 '"${{ steps.change_detection.outputs.changes_count }}"$' 个文件'
           commit_msg+=$'\n• 保留 '"${{ steps.file_protection.outputs.count }}"$' 个自定义文件'
           
-          git commit -m "$commit_msg"
-          git push origin "${{ env.TARGET_BRANCH }}"
+          git commit -m "$commit_msg" || { echo "提交失败"; exit 1; }
+          git push origin "${{ env.TARGET_BRANCH }}" || { echo "推送失败"; exit 1; }
           
           echo "✅ 提交成功: $commit_msg"
           echo "commit_sha=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
           echo "full_sha=$(git rev-parse HEAD)" >> $GITHUB_ENV
+          echo "$(date) - 提交完成"
 
       # 7. 设置时区
       - name: Set Shanghai time
@@ -179,7 +206,7 @@ jobs:
           echo "CURRENT_TIME_SHORT=$TZ_SHORT" >> $GITHUB_ENV
           echo "CURRENT_TIME_FULL=$TZ_FULL" >> $GITHUB_ENV
 
-      # 8. 统一通知（添加文件链接）
+      # 8. 统一通知
       - name: Notify Telegram
         if: success()
         uses: appleboy/telegram-action@master
@@ -232,5 +259,4 @@ jobs:
         run: |
           echo "🧹 清理工作区..."
           rm -rf source-repo target-repo
-          rm -f /tmp/protected-list.txt /tmp/exclude-list.txt
-          echo "✅ 清理完成"
+          rm -f /tmp/protected
